@@ -1,0 +1,253 @@
+Course Progress Implementation for NSBS Platform
+Course Progress Per User
+Yes, course progress appends per user and is displayed in multiple locations with different levels of detail:
+
+Primary Display Locations
+Dashboard (/dashboard) - High-level overview:
+
+typescript
+// Course progress cards showing:
+- Course title
+- Overall completion percentage (0-100%)
+- Visual progress bar
+- "Continue Learning" or "Start Course" button
+- Exam status (locked/available/completed)
+Course Overview (/my-courses/[id]) - Detailed view:
+
+typescript
+// Module-level progress breakdown:
+- Overall course progress bar
+- Module completion status (completed/in-progress/locked)
+- Lesson completion checkmarks within each module
+- Current lesson indicator
+- Exam access status
+Lesson Viewer (/my-courses/[id]/lesson/[lessonId]) - Contextual progress:
+
+typescript
+// Within-lesson progress:
+- "Lesson X of Y" indicator
+- Module progress context
+- Course-wide progress percentage
+- Next lesson preview
+Progress Change Indicators
+Primary Indicator: Lesson Completion
+
+typescript
+interface LessonProgress {
+  lessonId: string
+  userId: string
+  completedAt: Date | null
+  timeSpentSeconds: number
+  markCompleteAction: 'manual' | 'auto' // Based on time spent
+}
+Progress Calculation Logic:
+
+sql
+-- Course progress calculation
+SELECT 
+  COUNT(CASE WHEN lp.completed_at IS NOT NULL THEN 1 END) as completed_lessons,
+  COUNT(l.id) as total_lessons,
+  ROUND(
+    (COUNT(CASE WHEN lp.completed_at IS NOT NULL THEN 1 END)::float / COUNT(l.id)) * 100
+  ) as progress_percentage
+FROM lessons l
+INNER JOIN modules m ON l.module_id = m.id
+LEFT JOIN lesson_progress lp ON l.id = lp.lesson_id AND lp.user_id = $userId
+WHERE m.course_id = $courseId AND l.is_mandatory = true
+Sequential Access Control:
+
+typescript
+// Lessons unlock sequentially within modules
+// Modules unlock when previous module is 100% complete
+function canAccessLesson(userId: string, lessonId: string): boolean {
+  const lesson = getLessonWithOrder(lessonId)
+  const previousLessons = getLessonsBeforeOrder(lesson.orderIndex, lesson.moduleId)
+  
+  return previousLessons.every(prevLesson => 
+    isLessonCompleted(userId, prevLesson.id)
+  )
+}
+Course Progress Persistence
+Highly Persistent with multiple storage layers:
+
+Database Persistence (Primary)
+sql
+-- lesson_progress table stores completion state
+CREATE TABLE lesson_progress (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  lesson_id UUID REFERENCES lessons(id) ON DELETE CASCADE,
+  completed_at TIMESTAMPTZ,
+  time_spent_seconds INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, lesson_id)
+);
+State Management (Zustand)
+typescript
+interface CourseProgressState {
+  courseProgress: Map<string, {
+    percentage: number
+    completedLessons: number
+    totalLessons: number
+    canTakeExam: boolean
+    lastAccessedLesson: string | null
+  }>
+  
+  // Persisted to localStorage
+  persistProgress: (courseId: string, progress: CourseProgress) => void
+  loadProgress: (courseId: string) => Promise<CourseProgress>
+}
+Backup/Recovery
+typescript
+// Progress is never lost due to:
+1. Database as source of truth
+2. Real-time sync on lesson completion
+3. localStorage backup for offline scenarios
+4. Session recovery on reconnection
+Course Progress Reset (Idiomatic Reasoning)
+Reset is philosophically discouraged but technically supported:
+
+NSBS Philosophy Conflicts
+typescript
+// From exclusion guide principles:
+- "Self-paced learning without external pressures"
+- "Focus on knowledge acquisition, not superficial metrics"
+- "Individual focus without comparison pressures"
+- "Emphasis on content comprehension and retention"
+Technical Implementation (If Required)
+typescript
+async function resetCourseProgress(userId: string, courseId: string) {
+  // Only allow if user explicitly requests and confirms
+  await db.transaction(async (tx) => {
+    // Delete all lesson progress
+    await tx.delete(lessonProgress)
+      .where(and(
+        eq(lessonProgress.userId, userId),
+        eq(lessonProgress.courseId, courseId)
+      ))
+    
+    // Delete exam attempts (but preserve certificates)
+    await tx.delete(examAttempts)
+      .where(and(
+        eq(examAttempts.userId, userId),
+        eq(examAttempts.courseId, courseId),
+        isNull(examAttempts.certificateId) // Keep certified attempts
+      ))
+  })
+}
+Alternative Approach
+typescript
+// Instead of reset, provide "Review Mode"
+interface ReviewSession {
+  userId: string
+  courseId: string
+  type: 'review' | 'initial'
+  startedAt: Date
+  // Allows re-reading without affecting progress
+}
+Multiple Course Progress Management
+Each course tracked independently with no cross-course dependencies:
+
+Data Structure
+typescript
+interface UserEnrollments {
+  enrollments: Map<string, {
+    courseId: string
+    enrolledAt: Date
+    progress: CourseProgress
+    examAttempts: number
+    status: 'active' | 'completed' | 'expired'
+  }>
+}
+Dashboard Display
+typescript
+// Dashboard shows all enrolled courses
+function DashboardCourseGrid() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {enrollments.map(enrollment => (
+        <CourseProgressCard 
+          key={enrollment.courseId}
+          course={enrollment.course}
+          progress={enrollment.progress}
+          lastAccessed={enrollment.lastAccessedLesson}
+        />
+      ))}
+    </div>
+  )
+}
+Independent Progress Tracking
+typescript
+// No course affects another's progress
+// No prerequisites between courses (per exclusion guide)
+// Each course is standalone and complete
+
+const courseA_progress = getCourseProgress(userId, 'course-a-id')
+const courseB_progress = getCourseProgress(userId, 'course-b-id')
+// These are completely independent
+Progress Bar Locations
+1. Dashboard Overview
+typescript
+// High-level progress bars for all courses
+<div className="course-grid">
+  {userCourses.map(course => (
+    <CourseCard key={course.id}>
+      <h3>{course.title}</h3>
+      <ProgressBar 
+        value={course.progress.percentage} 
+        max={100}
+        className="w-full h-2 bg-gray-200"
+      />
+      <span>{course.progress.percentage}% Complete</span>
+    </CourseCard>
+  ))}
+</div>
+2. Course Overview Page
+typescript
+// Detailed module and lesson progress
+<div className="course-progress">
+  <ProgressBar value={overallProgress} className="mb-6" />
+  
+  {modules.map(module => (
+    <ModuleSection key={module.id}>
+      <ModuleHeader>
+        <h4>{module.title}</h4>
+        <ProgressIndicator value={module.progress} />
+      </ModuleHeader>
+      
+      {module.lessons.map(lesson => (
+        <LessonItem 
+          key={lesson.id}
+          completed={lesson.isCompleted}
+          current={lesson.id === currentLessonId}
+        />
+      ))}
+    </ModuleSection>
+  ))}
+</div>
+3. Lesson Navigation
+typescript
+// Within-lesson progress context
+<div className="lesson-header">
+  <div className="breadcrumb">
+    Course Progress: {courseProgress}% • 
+    Module {moduleNumber}: {lessonNumber} of {totalLessonsInModule}
+  </div>
+  <ProgressBar 
+    value={lessonNumber} 
+    max={totalLessonsInModule}
+    className="module-progress"
+  />
+</div>
+4. Mobile Progress Indicators
+typescript
+// Responsive progress display
+<div className="progress-mobile">
+  {/* Compact progress on mobile */}
+  <div className="flex items-center justify-between">
+    <span className="text-sm">Progress</span>
+    <span className="text-sm font-medium">{progress}%</span>
+  </div>
+  <ProgressBar value={progress} className="h-1 mt-1" />
+</div>
+This implementation ensures progress tracking aligns with NSBS's strategic exclusion principles while providing clear, motivating feedback to learners about their advancement through each independently purchased course.

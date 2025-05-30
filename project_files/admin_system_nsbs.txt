@@ -1,0 +1,670 @@
+Complete Admin System for NSBS Platform
+Admin Route Structure
+Single Admin Architecture
+typescript
+// Since only 1 admin exists, simplified RBAC
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL // Your email
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID // Your user ID
+
+function isAdmin(user: User): boolean {
+  return user.email === ADMIN_EMAIL || user.id === ADMIN_USER_ID
+}
+Complete Admin Routes
+text
+src/app/(admin)/
+├── admin/
+│   ├── layout.tsx                    // Admin-only layout wrapper
+│   ├── page.tsx                      // Admin dashboard
+│   ├── courses/
+│   │   ├── page.tsx                  // Course management overview
+│   │   ├── new/page.tsx              // Create new course
+│   │   ├── [id]/
+│   │   │   ├── page.tsx              // Edit course details
+│   │   │   ├── modules/
+│   │   │   │   ├── page.tsx          // Module management
+│   │   │   │   ├── new/page.tsx      // Create new module
+│   │   │   │   └── [moduleId]/
+│   │   │   │       ├── page.tsx      // Edit module
+│   │   │   │       ├── lessons/
+│   │   │   │       │   ├── page.tsx  // Lesson management
+│   │   │   │       │   ├── new/page.tsx // Create lesson
+│   │   │   │       │   └── [lessonId]/page.tsx // Edit lesson with WYSIWYG
+│   │   │   │       └── questions/
+│   │   │   │           ├── page.tsx  // Question bank
+│   │   │   │           ├── new/page.tsx // Create question
+│   │   │   │           └── [questionId]/page.tsx // Edit question
+│   │   │   ├── preview/page.tsx      // Course preview
+│   │   │   ├── publish/page.tsx      // Publish course
+│   │   │   └── analytics/page.tsx    // Course-specific metrics
+│   │   └── import/page.tsx           // Bulk import courses
+│   ├── users/
+│   │   ├── page.tsx                  // User management
+│   │   ├── [id]/page.tsx             // Individual user details
+│   │   └── enrollments/page.tsx      // Enrollment management
+│   ├── certificates/
+│   │   ├── page.tsx                  // Certificate management
+│   │   ├── verify/page.tsx           // Certificate verification
+│   │   └── revoke/page.tsx           // Revoke certificates
+│   ├── payments/
+│   │   ├── page.tsx                  // Payment overview
+│   │   ├── transactions/page.tsx     // Transaction history
+│   │   └── refunds/page.tsx          // Refund management
+│   ├── analytics/
+│   │   ├── page.tsx                  // Platform-wide analytics
+│   │   ├── financial/page.tsx        // Revenue metrics
+│   │   └── export/page.tsx           // Data export
+│   └── system/
+│       ├── page.tsx                  // System settings
+│       ├── backup/page.tsx           // Content backup
+│       └── logs/page.tsx             // System logs
+WYSIWYG Editor Implementation for .ts Files
+Course Content Structure
+typescript
+// src/content/courses/[courseId].ts
+export interface CourseContent {
+  id: string
+  title: string
+  description: string
+  price: number
+  status: 'draft' | 'published'
+  createdAt: string
+  updatedAt: string
+  modules: ModuleContent[]
+}
+
+export interface ModuleContent {
+  id: string
+  title: string
+  description: string
+  orderIndex: number
+  lessons: LessonContent[]
+}
+
+export interface LessonContent {
+  id: string
+  title: string
+  content: string // Rich HTML content from WYSIWYG
+  orderIndex: number
+  isMandatory: boolean
+  estimatedReadTimeMinutes: number
+}
+
+export interface ExamQuestion {
+  id: string
+  questionText: string
+  optionA: string
+  optionB: string
+  optionC: string
+  optionD: string
+  correctAnswer: 'A' | 'B' | 'C' | 'D'
+  difficulty: 1 | 2 | 3 | 4 | 5
+  topicCategory: string
+}
+
+// Example course file: src/content/courses/cyber-security-fundamentals.ts
+export const cyberSecurityFundamentals: CourseContent = {
+  id: 'cyber-security-fundamentals',
+  title: 'Cyber Security Fundamentals',
+  description: 'Comprehensive introduction to cybersecurity principles...',
+  price: 29900, // $299.00 in cents
+  status: 'published',
+  createdAt: '2025-01-15T00:00:00Z',
+  updatedAt: '2025-05-28T00:05:00Z',
+  modules: [
+    {
+      id: 'module-1-intro',
+      title: 'Introduction to Cybersecurity',
+      description: 'Foundational concepts and terminology',
+      orderIndex: 1,
+      lessons: [
+        {
+          id: 'lesson-1-what-is-cybersecurity',
+          title: 'What is Cybersecurity?',
+          content: `
+            <h2>Understanding Cybersecurity</h2>
+            <p>Cybersecurity is the practice of protecting systems, networks, and programs from digital attacks...</p>
+            <h3>Key Components</h3>
+            <ul>
+              <li><strong>Confidentiality:</strong> Ensuring information is accessible only to authorized individuals</li>
+              <li><strong>Integrity:</strong> Maintaining data accuracy and completeness</li>
+              <li><strong>Availability:</strong> Ensuring systems are accessible when needed</li>
+            </ul>
+          `,
+          orderIndex: 1,
+          isMandatory: true,
+          estimatedReadTimeMinutes: 12
+        }
+      ]
+    }
+  ],
+  examQuestions: [
+    {
+      id: 'q1-cia-triad',
+      questionText: 'What does the CIA triad in cybersecurity stand for?',
+      optionA: 'Central Intelligence Agency',
+      optionB: 'Confidentiality, Integrity, Availability',
+      optionC: 'Cyber Information Analysis',
+      optionD: 'Computer Infrastructure Architecture',
+      correctAnswer: 'B',
+      difficulty: 2,
+      topicCategory: 'fundamentals'
+    }
+  ]
+}
+WYSIWYG Editor Component
+typescript
+// src/components/admin/wysiwyg-editor.tsx
+'use client'
+
+import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
+
+// Dynamic import to avoid SSR issues
+const ReactQuill = dynamic(() => import('react-quill'), { ssr: false })
+import 'react-quill/dist/quill.snow.css'
+
+interface WYSIWYGEditorProps {
+  initialContent: string
+  onSave: (content: string) => Promise<void>
+  lessonId: string
+  courseId: string
+}
+
+// Custom toolbar configuration for NSBS needs
+const toolbarOptions = [
+  [{ 'header': [2, 3, 4, false] }],
+  ['bold', 'italic', 'underline'],
+  [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+  ['blockquote'],
+  [{ 'color': [] }, { 'background': [] }],
+  [{ 'align': [] }],
+  ['clean'] // Remove formatting
+  // Explicitly excluded: images, videos, links (per NSBS exclusion guide)
+]
+
+export function WYSIWYGEditor({ initialContent, onSave, lessonId, courseId }: WYSIWYGEditorProps) {
+  const [content, setContent] = useState(initialContent)
+  const [isSaving, setIsSaving] = useState(false)
+  const [lastSaved, setLastSaved] = useState<Date | null>(null)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+
+  useEffect(() => {
+    setHasUnsavedChanges(content !== initialContent)
+  }, [content, initialContent])
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      await onSave(content)
+      setLastSaved(new Date())
+      setHasUnsavedChanges(false)
+    } catch (error) {
+      console.error('Failed to save content:', error)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // Auto-save every 30 seconds if there are changes
+  useEffect(() => {
+    if (!hasUnsavedChanges) return
+
+    const autoSaveTimer = setTimeout(() => {
+      handleSave()
+    }, 30000)
+
+    return () => clearTimeout(autoSaveTimer)
+  }, [content, hasUnsavedChanges])
+
+  return (
+    <div className="wysiwyg-editor">
+      <div className="editor-header flex justify-between items-center mb-4">
+        <div className="flex items-center gap-4">
+          <h3 className="text-lg font-semibold">Lesson Content Editor</h3>
+          {hasUnsavedChanges && (
+            <span className="text-yellow-600 text-sm">Unsaved changes</span>
+          )}
+          {lastSaved && (
+            <span className="text-green-600 text-sm">
+              Last saved: {lastSaved.toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={isSaving || !hasUnsavedChanges}
+          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+        >
+          {isSaving ? 'Saving...' : 'Save Content'}
+        </button>
+      </div>
+
+      <div className="editor-container border rounded-lg">
+        <ReactQuill
+          theme="snow"
+          value={content}
+          onChange={setContent}
+          modules={{
+            toolbar: toolbarOptions
+          }}
+          formats={[
+            'header', 'bold', 'italic', 'underline',
+            'list', 'bullet', 'blockquote',
+            'color', 'background', 'align'
+          ]}
+          style={{ height: '500px', marginBottom: '42px' }}
+        />
+      </div>
+
+      <div className="editor-footer mt-4">
+        <div className="text-sm text-gray-600">
+          Word count: {content.replace(/<[^>]*>/g, '').split(' ').length}
+        </div>
+      </div>
+    </div>
+  )
+}
+File System Management API
+typescript
+// src/app/api/admin/courses/[courseId]/content/route.ts
+import { NextRequest } from 'next/server'
+import fs from 'fs/promises'
+import path from 'path'
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: { courseId: string } }
+) {
+  const user = await getCurrentUser()
+  if (!isAdmin(user)) {
+    return new Response('Forbidden', { status: 403 })
+  }
+
+  const { lessonId, content } = await request.json()
+  
+  try {
+    // Read current course file
+    const courseFilePath = path.join(
+      process.cwd(),
+      'src/content/courses',
+      `${params.courseId}.ts`
+    )
+    
+    const courseFileContent = await fs.readFile(courseFilePath, 'utf-8')
+    
+    // Parse and update content (simplified - you'd need proper AST manipulation)
+    const updatedContent = updateLessonContent(courseFileContent, lessonId, content)
+    
+    // Write back to file
+    await fs.writeFile(courseFilePath, updatedContent, 'utf-8')
+    
+    // Update the updatedAt timestamp
+    const timestamp = new Date().toISOString()
+    
+    // Trigger build regeneration if needed
+    await regenerateStaticData()
+    
+    return Response.json({ 
+      success: true, 
+      updatedAt: timestamp 
+    })
+  } catch (error) {
+    console.error('Failed to update course content:', error)
+    return new Response('Internal Server Error', { status: 500 })
+  }
+}
+
+// Helper function to update lesson content in .ts file
+function updateLessonContent(
+  fileContent: string, 
+  lessonId: string, 
+  newContent: string
+): string {
+  // This would use proper AST manipulation in production
+  // For now, a simplified regex replacement approach
+  const lessonRegex = new RegExp(
+    `(id: '${lessonId}'[\\s\\S]*?content: \`)([\\s\\S]*?)(\`[\\s\\S]*?orderIndex:)`,
+    'g'
+  )
+  
+  const escapedContent = newContent
+    .replace(/\\/g, '\\\\')
+    .replace(/`/g, '\\`')
+    .replace(/\${/g, '\\${')
+  
+  return fileContent.replace(lessonRegex, `$1${escapedContent}$3`)
+}
+NSBS-Specific Metrics Implementation
+Core Metrics Aligned with Strategic Exclusion
+typescript
+// src/lib/analytics/nsbs-metrics.ts
+
+export interface NSBSMetrics {
+  // Educational Effectiveness (Primary Focus)
+  courseCompletionRate: number
+  examPassRate: number
+  averageExamScore: number
+  timeToCompletion: {
+    mean: number
+    median: number
+    percentile95: number
+  }
+  
+  // Business Sustainability
+  revenue: {
+    total: number
+    perCourse: number
+    examVoucherRevenue: number
+  }
+  enrollmentGrowth: number
+  
+  // Platform Performance
+  contentIntegrity: boolean
+  systemUptime: number
+  
+  // Minimal User Behavior (Privacy-Focused)
+  progressAbandonmentPoints: string[] // Where users typically stop
+  examRetakeRate: number
+}
+
+export class NSBSAnalytics {
+  // Focus on educational outcomes, not engagement tricks
+  async getCourseCompletionRate(courseId?: string): Promise<number> {
+    const enrollments = await db.query.enrollments.findMany({
+      where: courseId ? eq(enrollments.courseId, courseId) : undefined,
+      with: {
+        course: true
+      }
+    })
+    
+    const completions = await db.query.certificates.findMany({
+      where: courseId ? eq(certificates.courseId, courseId) : undefined
+    })
+    
+    return enrollments.length > 0 ? (completions.length / enrollments.length) * 100 : 0
+  }
+
+  async getExamPassRate(courseId?: string): Promise<number> {
+    const attempts = await db.query.examAttempts.findMany({
+      where: and(
+        courseId ? eq(examAttempts.courseId, courseId) : undefined,
+        isNotNull(examAttempts.score)
+      )
+    })
+    
+    const passed = attempts.filter(attempt => attempt.score >= 80)
+    
+    return attempts.length > 0 ? (passed.length / attempts.length) * 100 : 0
+  }
+
+  async getContentCompletionDropoff(courseId: string): Promise<string[]> {
+    // Identify lessons where users commonly stop progressing
+    const lessons = await db.query.lessons.findMany({
+      where: eq(lessons.courseId, courseId),
+      orderBy: [asc(lessons.orderIndex)]
+    })
+    
+    const dropoffPoints: string[] = []
+    
+    for (let i = 0; i < lessons.length - 1; i++) {
+      const currentCompletion = await db.query.lessonProgress.count({
+        where: and(
+          eq(lessonProgress.lessonId, lessons[i].id),
+          isNotNull(lessonProgress.completedAt)
+        )
+      })
+      
+      const nextCompletion = await db.query.lessonProgress.count({
+        where: and(
+          eq(lessonProgress.lessonId, lessons[i + 1].id),
+          isNotNull(lessonProgress.completedAt)
+        )
+      })
+      
+      const dropoffRate = currentCompletion > 0 ? 
+        ((currentCompletion - nextCompletion) / currentCompletion) * 100 : 0
+      
+      // Flag significant dropoff points (>20% drop)
+      if (dropoffRate > 20) {
+        dropoffPoints.push(lessons[i].title)
+      }
+    }
+    
+    return dropoffPoints
+  }
+
+  async getRevenueMetrics(): Promise<{
+    totalRevenue: number
+    courseRevenue: number
+    examVoucherRevenue: number
+    averageRevenuePerUser: number
+  }> {
+    const [coursePayments, voucherPayments] = await Promise.all([
+      db.query.enrollments.findMany({
+        columns: { amountPaidCents: true }
+      }),
+      db.query.examVouchers.findMany({
+        columns: { amountPaidCents: true }
+      })
+    ])
+    
+    const courseRevenue = coursePayments.reduce((sum, p) => sum + p.amountPaidCents, 0) / 100
+    const voucherRevenue = voucherPayments.reduce((sum, p) => sum + p.amountPaidCents, 0) / 100
+    const totalRevenue = courseRevenue + voucherRevenue
+    
+    const uniqueUsers = new Set([
+      ...coursePayments.map(p => p.userId),
+      ...voucherPayments.map(p => p.userId)
+    ]).size
+    
+    return {
+      totalRevenue,
+      courseRevenue,
+      examVoucherRevenue: voucherRevenue,
+      averageRevenuePerUser: uniqueUsers > 0 ? totalRevenue / uniqueUsers : 0
+    }
+  }
+}
+Admin Analytics Dashboard
+typescript
+// src/app/(admin)/admin/analytics/page.tsx
+'use client'
+
+import { useState, useEffect } from 'react'
+import { NSBSAnalytics } from '@/lib/analytics/nsbs-metrics'
+
+export default function AnalyticsDashboard() {
+  const [metrics, setMetrics] = useState<NSBSMetrics | null>(null)
+  const [selectedCourse, setSelectedCourse] = useState<string>('all')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    loadMetrics()
+  }, [selectedCourse])
+
+  const loadMetrics = async () => {
+    setLoading(true)
+    try {
+      const response = await fetch(`/api/admin/analytics?course=${selectedCourse}`)
+      const data = await response.json()
+      setMetrics(data)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (loading) return <div>Loading analytics...</div>
+
+  return (
+    <div className="admin-analytics p-6">
+      <div className="header mb-8">
+        <h1 className="text-3xl font-bold">NSBS Platform Analytics</h1>
+        <p className="text-gray-600 mt-2">
+          Educational effectiveness and business sustainability metrics
+        </p>
+      </div>
+
+      {/* Educational Effectiveness Metrics */}
+      <div className="metrics-section mb-8">
+        <h2 className="text-xl font-semibold mb-4">Educational Effectiveness</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <MetricCard
+            title="Course Completion Rate"
+            value={`${metrics?.courseCompletionRate.toFixed(1)}%`}
+            description="Percentage of enrolled users who complete courses"
+            status={getCompletionRateStatus(metrics?.courseCompletionRate)}
+          />
+          <MetricCard
+            title="Exam Pass Rate"
+            value={`${metrics?.examPassRate.toFixed(1)}%`}
+            description="Percentage of exam attempts that achieve 80%+"
+            status={getPassRateStatus(metrics?.examPassRate)}
+          />
+          <MetricCard
+            title="Average Exam Score"
+            value={`${metrics?.averageExamScore.toFixed(1)}%`}
+            description="Mean score across all exam attempts"
+            status={getExamScoreStatus(metrics?.averageExamScore)}
+          />
+        </div>
+      </div>
+
+      {/* Business Sustainability */}
+      <div className="metrics-section mb-8">
+        <h2 className="text-xl font-semibold mb-4">Business Sustainability</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <MetricCard
+            title="Total Revenue"
+            value={`$${metrics?.revenue.total.toLocaleString()}`}
+            description="Combined course and exam voucher revenue"
+            showTrend={true}
+          />
+          <MetricCard
+            title="Average Revenue Per User"
+            value={`$${metrics?.revenue.perUser.toFixed(2)}`}
+            description="Revenue divided by unique paying users"
+            showTrend={true}
+          />
+        </div>
+      </div>
+
+      {/* Content Quality Insights */}
+      <div className="metrics-section mb-8">
+        <h2 className="text-xl font-semibold mb-4">Content Quality Insights</h2>
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h3 className="font-medium mb-3">Content Completion Dropoff Points</h3>
+          {metrics?.progressAbandonmentPoints.length === 0 ? (
+            <p className="text-green-600">No significant dropoff points detected</p>
+          ) : (
+            <ul className="list-disc list-inside space-y-2">
+              {metrics?.progressAbandonmentPoints.map((point, index) => (
+                <li key={index} className="text-red-600">
+                  High dropoff after: {point}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      {/* Data Export */}
+      <div className="export-section">
+        <h2 className="text-xl font-semibold mb-4">Data Export</h2>
+        <div className="flex gap-4">
+          <button 
+            onClick={() => exportMetrics('csv')}
+            className="bg-blue-600 text-white px-4 py-2 rounded"
+          >
+            Export CSV
+          </button>
+          <button 
+            onClick={() => exportMetrics('pdf')}
+            className="bg-green-600 text-white px-4 py-2 rounded"
+          >
+            Export PDF Report
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MetricCard({ title, value, description, status, showTrend = false }: {
+  title: string
+  value: string
+  description: string
+  status?: 'good' | 'warning' | 'poor'
+  showTrend?: boolean
+}) {
+  const statusColors = {
+    good: 'border-green-500 bg-green-50',
+    warning: 'border-yellow-500 bg-yellow-50',
+    poor: 'border-red-500 bg-red-50'
+  }
+
+  return (
+    <div className={`p-6 rounded-lg border-2 ${status ? statusColors[status] : 'border-gray-200 bg-white'}`}>
+      <h3 className="font-medium text-gray-900">{title}</h3>
+      <div className="mt-2">
+        <span className="text-3xl font-bold text-gray-900">{value}</span>
+      </div>
+      <p className="text-sm text-gray-600 mt-2">{description}</p>
+    </div>
+  )
+}
+
+// Helper functions for status determination
+function getCompletionRateStatus(rate?: number): 'good' | 'warning' | 'poor' {
+  if (!rate) return 'poor'
+  if (rate >= 70) return 'good'
+  if (rate >= 50) return 'warning'
+  return 'poor'
+}
+
+function getPassRateStatus(rate?: number): 'good' | 'warning' | 'poor' {
+  if (!rate) return 'poor'
+  if (rate >= 80) return 'good'
+  if (rate >= 65) return 'warning'
+  return 'poor'
+}
+
+function getExamScoreStatus(score?: number): 'good' | 'warning' | 'poor' {
+  if (!score) return 'poor'
+  if (score >= 85) return 'good'
+  if (score >= 75) return 'warning'
+  return 'poor'
+}
+Key Benefits of This Metrics Approach
+Educational Focus (Not Vanity Metrics)
+
+Course completion rate shows actual learning commitment
+
+Exam pass rate indicates content effectiveness
+
+Content dropoff points identify where material may need improvement
+
+Privacy-Aligned Tracking
+
+No detailed behavioral monitoring
+
+No reading speed or time-spent tracking
+
+Focus on outcomes, not process surveillance
+
+Business Sustainability
+
+Revenue metrics ensure platform viability
+
+Average revenue per user helps with pricing optimization
+
+Minimal operational overhead
+
+Content Quality Validation
+
+Dropoff analysis helps identify problematic content
+
+Pass rate analysis validates exam difficulty calibration
+
+Completion patterns inform content improvements
+
+This admin system provides complete control over the NSBS platform while maintaining the strategic exclusion principles - focusing on educational effectiveness and business sustainability rather than engagement manipulation or privacy-invasive tracking

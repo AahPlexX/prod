@@ -1,0 +1,170 @@
+Add this to the complete and absolute full previous response: 
+{"web":{"client_id":"1022530169855-vdqiuh12i4g4o3c9tfqpcigpi2159a78.apps.googleusercontent.com","project_id":"nsbs-certified-460417","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_secret":"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","redirect_uris":["https://nsbs-certified.com/api/auth/callback","http://nsbs-certified.com/api/auth/callback","https://www.nsbs-certified.com/api/auth/callback","http://www.nsbs-certified.com/api/auth/callback"],"javascript_origins":["https://www.nsbs-certified.com","http://www.nsbs-certified.com","https://nsbs-certified.com","http://nsbs-certified.com"]}}
+
+=====stripe: private key:=====
+
+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
+
+====stripe for restricted key for better-auth-----
+
+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
+
+BETTER-AUTH API KEY:
+BETTER_AUTH_SECRET=oMZggfZiGXAW2qrRzKpmARYjs71TJwYv
+
+STRIPE:
+ADMIN@NSBS-CERTIFIED.COM
+
+publishable KEY:pk_live_51QrJyELvO2CMwfxd40FgpGaoGIjAsTD3B5SzYbO4dXcNN9isfWg6OQInvbMVdBmo8lOINKIcshHdXITaHEcaeJgB00bAbFjItT
+
+google_api_key for OAuth:
+OAuth client created
+The client ID can always be accessed from Clients tab under Google Auth Platform.
+
+OAuth access is restricted to the test users  listed on your OAuth consent screen
+Client ID
+1022530169855-vdqiuh12i4g4o3c9tfqpcigpi2159a78.apps.googleusercontent.com
+Starting in June 2025, you will no longer be able to view or download the client secret once you close this dialog. Make sure you have copied or downloaded the information below and securely stored it.
+Client secret
+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
+Creation date
+May 20, 2025 at 1:01:32 PM GMT-5
+Status
+ Enabled
+
+===admin@nsbs-certified.com=== *supabase*
+
+pass: cObd7fpM3aNzHj4O
+
+====.env.local====
+
+NEXT_PUBLIC_SUPABASE_URL=https://ckdadactgselrtcgwkqi.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0MDg4NzMsImV4cCI6MjA2Mzk4NDg3M30.L4cjRQmimaZhqcjiL_n5nKst-zf2J_oIcltuQdHoPPA
+
+====page.tsx====
+
+
+import { createClient } from '@/utils/supabase/server'
+import { cookies } from 'next/headers'
+
+export default async function Page() {
+  const cookieStore = await cookies()
+  const supabase = createClient(cookieStore)
+
+  const { data: todos } = await supabase.from('todos').select()
+
+  return (
+    <ul>
+      {todos?.map((todo) => (
+        <li>{todo}</li>
+      ))}
+    </ul>
+  )
+}
+
+
+====utils/supabase/server.ts====
+
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { cookies } from "next/headers";
+
+export const createClient = (cookieStore: ReturnType<typeof cookies>) => {
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options))
+          } catch {
+            // The `setAll` method was called from a Server Component.
+            // This can be ignored if you have middleware refreshing
+            // user sessions.
+          }
+        },
+      },
+    },
+  );
+};
+
+
+====utils/supabase/client.ts====
+
+
+import { createBrowserClient } from "@supabase/ssr";
+
+export const createClient = () =>
+  createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  );
+
+====utils/supabase/middleware.ts====
+
+
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { type NextRequest, NextResponse } from "next/server";
+
+export const createClient = (request: NextRequest) => {
+  // Create an unmodified response
+  let supabaseResponse = NextResponse.next({
+    request: {
+      headers: request.headers,
+    },
+  });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({
+            request,
+          })
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          )
+        },
+      },
+    },
+  );
+
+  return supabaseResponse
+};
+
+
+====db.js====
+
+import postgres from 'postgres'
+
+const connectionString = process.env.DATABASE_URL
+const sql = postgres(connectionString)
+
+export default sql
+
+
+*******=====URL:=====*******
+
+https://ckdadactgselrtcgwkqi.supabase.co
+
+
+******anon public key******
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0MDg4NzMsImV4cCI6MjA2Mzk4NDg3M30.L4cjRQmimaZhqcjiL_n5nKst-zf2J_oIcltuQdHoPPA
+
+*********service role key*******
+
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0ODQwODg3MywiZXhwIjoyMDYzOTg0ODczfQ.DAuE0Vm5iueaXJBbl5vm4xdmzmcBkRkVGYIMx0ZnsgA
+
+
+********JWT Secret********
+
+dlmjF3OMqdfPEg4fZxuc/Ql2IjHQO77kEmFhPWSwyQWXt/iqDhT0Lgz6b02lVDRs0l/8QaBHCUg8LC9+OuIKrQ==

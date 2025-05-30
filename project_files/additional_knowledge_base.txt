@@ -1,0 +1,722 @@
+NSBS Platform: Advanced Implementation Knowledge Base
+Database Schema and Entity Relationships
+Supabase Database Schema
+sql
+-- Users table with role-based access control
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  name VARCHAR(255),
+  role user_role DEFAULT 'USER',
+  email_verified BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  last_login_at TIMESTAMPTZ,
+  stripe_customer_id VARCHAR(255) UNIQUE
+);
+
+-- Custom ENUM for user roles
+CREATE TYPE user_role AS ENUM ('GUEST', 'USER', 'ENROLLED_USER', 'CERTIFICATE_OWNER', 'ADMIN');
+
+-- Courses with versioning and content integrity
+CREATE TABLE courses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title VARCHAR(500) NOT NULL,
+  slug VARCHAR(255) UNIQUE NOT NULL,
+  description TEXT NOT NULL,
+  price_cents INTEGER NOT NULL,
+  exam_threshold INTEGER DEFAULT 80,
+  status course_status DEFAULT 'draft',
+  content_hash VARCHAR(64), -- SHA-256 of all lesson content for integrity
+  version INTEGER DEFAULT 1,
+  published_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Modules for course organization
+CREATE TABLE modules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  title VARCHAR(500) NOT NULL,
+  description TEXT,
+  order_index INTEGER NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Lessons with content versioning
+CREATE TABLE lessons (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  module_id UUID REFERENCES modules(id) ON DELETE CASCADE,
+  title VARCHAR(500) NOT NULL,
+  content TEXT NOT NULL, -- Rich text, sanitized HTML
+  content_word_count INTEGER GENERATED ALWAYS AS (
+    array_length(string_to_array(regexp_replace(content, '<[^>]*>', '', 'g'), ' '), 1)
+  ) STORED,
+  order_index INTEGER NOT NULL,
+  is_mandatory BOOLEAN DEFAULT TRUE,
+  estimated_read_time_minutes INTEGER GENERATED ALWAYS AS (
+    GREATEST(1, content_word_count / 200) -- 200 WPM average reading speed
+  ) STORED,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enrollments with payment tracking
+CREATE TABLE enrollments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  stripe_payment_intent_id VARCHAR(255) NOT NULL,
+  amount_paid_cents INTEGER NOT NULL,
+  enrolled_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '2 years', -- Access duration
+  UNIQUE(user_id, course_id)
+);
+
+-- Lesson progress tracking
+CREATE TABLE lesson_progress (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  lesson_id UUID REFERENCES lessons(id) ON DELETE CASCADE,
+  completed_at TIMESTAMPTZ,
+  time_spent_seconds INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, lesson_id)
+);
+
+-- Exam questions with security measures
+CREATE TABLE exam_questions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  question_text TEXT NOT NULL,
+  option_a TEXT NOT NULL,
+  option_b TEXT NOT NULL,
+  option_c TEXT NOT NULL,
+  option_d TEXT NOT NULL,
+  correct_answer CHAR(1) CHECK (correct_answer IN ('A', 'B', 'C', 'D')),
+  difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 5),
+  topic_category VARCHAR(255),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Exam attempts with detailed scoring
+CREATE TABLE exam_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  attempt_number INTEGER NOT NULL,
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  submitted_at TIMESTAMPTZ,
+  score INTEGER, -- 0-100
+  passed BOOLEAN GENERATED ALWAYS AS (score >= 80) STORED,
+  questions_data JSONB NOT NULL, -- Randomized questions and answers
+  answers_data JSONB, -- User's answers
+  time_limit_minutes INTEGER DEFAULT 120,
+  ip_address INET,
+  user_agent TEXT,
+  browser_fingerprint VARCHAR(255),
+  UNIQUE(user_id, course_id, attempt_number)
+);
+
+-- Certificates with verification
+CREATE TABLE certificates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  exam_attempt_id UUID REFERENCES exam_attempts(id) ON DELETE CASCADE,
+  verification_code VARCHAR(20) UNIQUE NOT NULL,
+  issued_at TIMESTAMPTZ DEFAULT NOW(),
+  pdf_url TEXT,
+  pdf_generated_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT
+);
+
+-- Exam vouchers for additional attempts
+CREATE TABLE exam_vouchers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  stripe_payment_intent_id VARCHAR(255) NOT NULL,
+  amount_paid_cents INTEGER NOT NULL DEFAULT 14900, -- $149
+  purchased_at TIMESTAMPTZ DEFAULT NOW(),
+  used_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '1 year'
+);
+Advanced API Architecture
+RESTful API Endpoints with Detailed Security
+typescript
+// Course content access with enrollment verification
+// GET /api/courses/[courseId]/lessons/[lessonId]
+export async function GET(
+  request: Request,
+  { params }: { params: { courseId: string; lessonId: string } }
+) {
+  try {
+    const authResult = await authenticateRequest(request)
+    if (!authResult.success) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+
+    // Verify enrollment and access rights
+    const enrollment = await db.query.enrollments.findFirst({
+      where: and(
+        eq(enrollments.userId, authResult.userId),
+        eq(enrollments.courseId, params.courseId),
+        or(
+          isNull(enrollments.expiresAt),
+          gte(enrollments.expiresAt, new Date())
+        )
+      )
+    })
+
+    if (!enrollment) {
+      return new Response('Course access denied', { status: 403 })
+    }
+
+    // Verify lesson belongs to course
+    const lesson = await db.query.lessons.findFirst({
+      where: eq(lessons.id, params.lessonId),
+      with: {
+        module: {
+          where: eq(modules.courseId, params.courseId)
+        }
+      }
+    })
+
+    if (!lesson) {
+      return new Response('Lesson not found', { status: 404 })
+    }
+
+    // Track lesson access
+    await trackLessonAccess(authResult.userId, params.lessonId)
+
+    return Response.json({
+      id: lesson.id,
+      title: lesson.title,
+      content: lesson.content,
+      estimatedReadTime: lesson.estimatedReadTimeMinutes,
+      orderIndex: lesson.orderIndex
+    })
+  } catch (error) {
+    console.error('Lesson access error:', error)
+    return new Response('Internal server error', { status: 500 })
+  }
+}
+
+// Exam generation with question randomization
+// POST /api/courses/[courseId]/exam/generate
+export async function POST(
+  request: Request,
+  { params }: { params: { courseId: string } }
+) {
+  const authResult = await authenticateRequest(request)
+  if (!authResult.success) {
+    return new Response('Unauthorized', { status: 401 })
+  }
+
+  // Verify 100% lesson completion
+  const completionStatus = await calculateCourseCompletion(
+    authResult.userId,
+    params.courseId
+  )
+
+  if (completionStatus.percentage < 100) {
+    return new Response('Complete all lessons before taking exam', { status: 403 })
+  }
+
+  // Check for existing active attempt
+  const activeAttempt = await db.query.examAttempts.findFirst({
+    where: and(
+      eq(examAttempts.userId, authResult.userId),
+      eq(examAttempts.courseId, params.courseId),
+      isNull(examAttempts.submittedAt)
+    )
+  })
+
+  if (activeAttempt) {
+    return Response.json({ examAttemptId: activeAttempt.id })
+  }
+
+  // Generate randomized exam
+  const questions = await generateRandomizedExam(params.courseId)
+  const attemptNumber = await getNextAttemptNumber(authResult.userId, params.courseId)
+
+  const examAttempt = await db.insert(examAttempts).values({
+    userId: authResult.userId,
+    courseId: params.courseId,
+    attemptNumber,
+    questionsData: questions,
+    ipAddress: getClientIP(request),
+    userAgent: request.headers.get('user-agent'),
+    browserFingerprint: await generateBrowserFingerprint(request)
+  }).returning()
+
+  return Response.json({ examAttemptId: examAttempt[0].id })
+}
+State Management with Zustand
+Course Progress Store
+typescript
+interface CourseProgressState {
+  enrollments: Map<string, Enrollment>
+  courseProgress: Map<string, CourseProgress>
+  currentLesson: Lesson | null
+  examState: ExamState | null
+  
+  // Actions
+  loadEnrollments: () => Promise<void>
+  markLessonComplete: (lessonId: string) => Promise<void>
+  updateCourseProgress: (courseId: string) => Promise<void>
+  startExam: (courseId: string) => Promise<string> // Returns exam attempt ID
+  submitExamAnswer: (questionId: string, answer: string) => void
+  submitExam: () => Promise<ExamResult>
+  loadCertificates: () => Promise<Certificate[]>
+}
+
+export const useCourseProgressStore = create<CourseProgressState>()(
+  devtools(
+    persist(
+      (set, get) => ({
+        enrollments: new Map(),
+        courseProgress: new Map(),
+        currentLesson: null,
+        examState: null,
+
+        loadEnrollments: async () => {
+          const response = await fetch('/api/user/enrollments')
+          const enrollments = await response.json()
+          
+          const enrollmentMap = new Map()
+          enrollments.forEach((enrollment: Enrollment) => {
+            enrollmentMap.set(enrollment.courseId, enrollment)
+          })
+          
+          set({ enrollments: enrollmentMap })
+        },
+
+        markLessonComplete: async (lessonId: string) => {
+          const response = await fetch(`/api/lessons/${lessonId}/complete`, {
+            method: 'POST'
+          })
+          
+          if (response.ok) {
+            const { courseId } = await response.json()
+            await get().updateCourseProgress(courseId)
+          }
+        },
+
+        updateCourseProgress: async (courseId: string) => {
+          const response = await fetch(`/api/courses/${courseId}/progress`)
+          const progress = await response.json()
+          
+          set((state) => ({
+            courseProgress: new Map(state.courseProgress).set(courseId, progress)
+          }))
+        },
+
+        startExam: async (courseId: string) => {
+          const response = await fetch(`/api/courses/${courseId}/exam/generate`, {
+            method: 'POST'
+          })
+          const { examAttemptId } = await response.json()
+          
+          const examResponse = await fetch(`/api/exam-attempts/${examAttemptId}`)
+          const examData = await examResponse.json()
+          
+          set({
+            examState: {
+              attemptId: examAttemptId,
+              questions: examData.questions,
+              answers: new Map(),
+              currentQuestionIndex: 0,
+              startTime: Date.now(),
+              timeLimit: examData.timeLimitMinutes * 60 * 1000
+            }
+          })
+          
+          return examAttemptId
+        },
+
+        submitExamAnswer: (questionId: string, answer: string) => {
+          set((state) => {
+            if (!state.examState) return state
+            
+            const newAnswers = new Map(state.examState.answers)
+            newAnswers.set(questionId, answer)
+            
+            return {
+              examState: {
+                ...state.examState,
+                answers: newAnswers
+              }
+            }
+          })
+        },
+
+        submitExam: async () => {
+          const examState = get().examState
+          if (!examState) throw new Error('No active exam')
+          
+          const response = await fetch(`/api/exam-attempts/${examState.attemptId}/submit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              answers: Object.fromEntries(examState.answers),
+              submittedAt: new Date().toISOString()
+            })
+          })
+          
+          const result = await response.json()
+          
+          set({ examState: null })
+          
+          return result
+        }
+      }),
+      {
+        name: 'course-progress-storage',
+        partialize: (state) => ({
+          courseProgress: Object.fromEntries(state.courseProgress),
+          // Don't persist exam state for security
+        })
+      }
+    )
+  )
+)
+Advanced Security Implementation
+Content Security and Anti-Cheating
+typescript
+// Browser fingerprinting for exam security
+export async function generateBrowserFingerprint(request: Request): Promise<string> {
+  const userAgent = request.headers.get('user-agent') || ''
+  const acceptLanguage = request.headers.get('accept-language') || ''
+  const acceptEncoding = request.headers.get('accept-encoding') || ''
+  
+  const fingerprint = btoa(`${userAgent}:${acceptLanguage}:${acceptEncoding}`)
+  return fingerprint
+}
+
+// Rate limiting for API endpoints
+export class RateLimiter {
+  private attempts: Map<string, { count: number; resetTime: number }> = new Map()
+  
+  async checkLimit(identifier: string, limit: number, windowMs: number): Promise<boolean> {
+    const now = Date.now()
+    const windowStart = now - windowMs
+    
+    const existing = this.attempts.get(identifier)
+    
+    if (!existing || existing.resetTime < windowStart) {
+      this.attempts.set(identifier, { count: 1, resetTime: now + windowMs })
+      return true
+    }
+    
+    if (existing.count >= limit) {
+      return false
+    }
+    
+    existing.count++
+    return true
+  }
+}
+
+// Content integrity verification
+export async function verifyContentIntegrity(courseId: string): Promise<boolean> {
+  const course = await db.query.courses.findFirst({
+    where: eq(courses.id, courseId),
+    with: {
+      modules: {
+        with: {
+          lessons: true
+        }
+      }
+    }
+  })
+  
+  if (!course) return false
+  
+  const allContent = course.modules
+    .flatMap(module => module.lessons)
+    .map(lesson => lesson.content)
+    .join('')
+  
+  const computedHash = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(allContent)
+  )
+  
+  const hashString = Array.from(new Uint8Array(computedHash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('')
+  
+  return hashString === course.contentHash
+}
+PDF Certificate Generation
+Advanced Certificate Creation
+typescript
+import PDFDocument from 'pdfkit'
+import QRCode from 'qrcode'
+
+export async function generateCertificatePDF(certificateId: string): Promise<Buffer> {
+  const certificate = await db.query.certificates.findFirst({
+    where: eq(certificates.id, certificateId),
+    with: {
+      user: true,
+      course: true,
+      examAttempt: true
+    }
+  })
+  
+  if (!certificate) throw new Error('Certificate not found')
+  
+  const doc = new PDFDocument({
+    size: 'A4',
+    layout: 'landscape',
+    margins: { top: 50, bottom: 50, left: 50, right: 50 }
+  })
+  
+  const buffers: Buffer[] = []
+  doc.on('data', buffers.push.bind(buffers))
+  
+  // Header with NSBS branding
+  doc.fontSize(32)
+     .font('Helvetica-Bold')
+     .fillColor('#1a365d')
+     .text('NSBS Certification', 0, 80, { align: 'center' })
+  
+  doc.fontSize(24)
+     .font('Helvetica')
+     .fillColor('#2d3748')
+     .text('Certificate of Completion', 0, 130, { align: 'center' })
+  
+  // Recipient information
+  doc.fontSize(16)
+     .text('This certifies that', 0, 200, { align: 'center' })
+  
+  doc.fontSize(28)
+     .font('Helvetica-Bold')
+     .fillColor('#1a365d')
+     .text(certificate.user.name || certificate.user.email, 0, 240, { align: 'center' })
+  
+  doc.fontSize(16)
+     .font('Helvetica')
+     .fillColor('#2d3748')
+     .text('has successfully completed', 0, 290, { align: 'center' })
+  
+  doc.fontSize(22)
+     .font('Helvetica-Bold')
+     .text(certificate.course.title, 0, 330, { align: 'center' })
+  
+  // Exam score
+  doc.fontSize(14)
+     .font('Helvetica')
+     .text(`Exam Score: ${certificate.examAttempt.score}%`, 0, 380, { align: 'center' })
+  
+  // Date and verification
+  const issuedDate = certificate.issuedAt.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+  
+  doc.fontSize(12)
+     .text(`Issued on ${issuedDate}`, 0, 420, { align: 'center' })
+     .text(`Verification Code: ${certificate.verificationCode}`, 0, 440, { align: 'center' })
+  
+  // QR Code for verification
+  const verificationUrl = `${process.env.NEXT_PUBLIC_APP_URL}/verify/${certificate.verificationCode}`
+  const qrCodeDataUrl = await QRCode.toDataURL(verificationUrl)
+  const qrCodeBuffer = Buffer.from(qrCodeDataUrl.split(',')[1], 'base64')
+  
+  doc.image(qrCodeBuffer, doc.page.width - 100, doc.page.height - 100, {
+    fit: [80, 80]
+  })
+  
+  // Digital signature placeholder
+  doc.fontSize(10)
+     .text('Digitally signed by NSBS Certification Authority', 50, doc.page.height - 30)
+  
+  doc.end()
+  
+  return new Promise((resolve) => {
+    doc.on('end', () => {
+      resolve(Buffer.concat(buffers))
+    })
+  })
+}
+Performance Optimization Strategies
+Database Query Optimization
+typescript
+// Efficient course progress calculation
+export async function calculateCourseCompletion(
+  userId: string,
+  courseId: string
+): Promise<CourseCompletion> {
+  const [totalLessons, completedLessons] = await Promise.all([
+    // Get total mandatory lessons count
+    db
+      .select({ count: count() })
+      .from(lessons)
+      .innerJoin(modules, eq(lessons.moduleId, modules.id))
+      .where(and(
+        eq(modules.courseId, courseId),
+        eq(lessons.isMandatory, true)
+      )),
+    
+    // Get completed lessons count
+    db
+      .select({ count: count() })
+      .from(lessonProgress)
+      .innerJoin(lessons, eq(lessonProgress.lessonId, lessons.id))
+      .innerJoin(modules, eq(lessons.moduleId, modules.id))
+      .where(and(
+        eq(lessonProgress.userId, userId),
+        eq(modules.courseId, courseId),
+        eq(lessons.isMandatory, true),
+        isNotNull(lessonProgress.completedAt)
+      ))
+  ])
+  
+  const total = totalLessons[0].count
+  const completed = completedLessons[0].count
+  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0
+  
+  return {
+    totalLessons: total,
+    completedLessons: completed,
+    percentage,
+    isComplete: percentage === 100
+  }
+}
+
+// Cached course catalog with Redis
+export async function getCachedCourseCatalog(): Promise<Course[]> {
+  const cacheKey = 'course-catalog'
+  const cached = await redis.get(cacheKey)
+  
+  if (cached) {
+    return JSON.parse(cached)
+  }
+  
+  const courses = await db.query.courses.findMany({
+    where: eq(courses.status, 'published'),
+    with: {
+      modules: {
+        with: {
+          lessons: {
+            columns: { id: true, title: true, orderIndex: true }
+          }
+        }
+      }
+    },
+    orderBy: [asc(courses.title)]
+  })
+  
+  await redis.setex(cacheKey, 3600, JSON.stringify(courses)) // 1 hour cache
+  
+  return courses
+}
+Testing Strategy
+Comprehensive Test Suite
+typescript
+// Integration tests for exam flow
+describe('Exam Flow Integration', () => {
+  let testUser: User
+  let testCourse: Course
+  let enrollment: Enrollment
+  
+  beforeEach(async () => {
+    testUser = await createTestUser()
+    testCourse = await createTestCourse()
+    enrollment = await createTestEnrollment(testUser.id, testCourse.id)
+    await completeAllLessons(testUser.id, testCourse.id)
+  })
+  
+  test('should generate exam with 100 randomized questions', async () => {
+    const response = await request(app)
+      .post(`/api/courses/${testCourse.id}/exam/generate`)
+      .set('Authorization', `Bearer ${testUser.token}`)
+      .expect(200)
+    
+    const { examAttemptId } = response.body
+    
+    const examAttempt = await db.query.examAttempts.findFirst({
+      where: eq(examAttempts.id, examAttemptId)
+    })
+    
+    expect(examAttempt).toBeDefined()
+    expect(examAttempt?.questionsData).toHaveLength(100)
+    
+    // Verify question randomization
+    const questions = examAttempt?.questionsData as ExamQuestion[]
+    const questionIds = questions.map(q => q.id)
+    const uniqueIds = new Set(questionIds)
+    expect(uniqueIds.size).toBe(100) // All questions should be unique
+  })
+  
+  test('should prevent exam access without 100% lesson completion', async () => {
+    // Create user with incomplete lessons
+    const incompleteUser = await createTestUser()
+    await createTestEnrollment(incompleteUser.id, testCourse.id)
+    // Don't complete all lessons
+    
+    await request(app)
+      .post(`/api/courses/${testCourse.id}/exam/generate`)
+      .set('Authorization', `Bearer ${incompleteUser.token}`)
+      .expect(403)
+  })
+  
+  test('should calculate exam score correctly', async () => {
+    const examAttemptId = await generateTestExam(testUser.id, testCourse.id)
+    const questions = await getExamQuestions(examAttemptId)
+    
+    // Answer 85 questions correctly (85% score)
+    const answers: Record<string, string> = {}
+    questions.forEach((question, index) => {
+      answers[question.id] = index < 85 ? question.correctAnswer : 'WRONG'
+    })
+    
+    const response = await request(app)
+      .post(`/api/exam-attempts/${examAttemptId}/submit`)
+      .set('Authorization', `Bearer ${testUser.token}`)
+      .send({ answers })
+      .expect(200)
+    
+    expect(response.body.score).toBe(85)
+    expect(response.body.passed).toBe(true)
+  })
+})
+
+// Load testing with Artillery
+export const loadTestConfig = {
+  config: {
+    target: 'http://localhost:3000',
+    phases: [
+      { duration: 60, arrivalRate: 10 }, // Ramp up
+      { duration: 300, arrivalRate: 50 }, // Sustained load
+      { duration: 60, arrivalRate: 100 } // Peak load
+    ]
+  },
+  scenarios: [
+    {
+      name: 'Course browsing',
+      weight: 70,
+      flow: [
+        { get: { url: '/api/courses' } },
+        { get: { url: '/api/courses/{{ $randomString() }}' } }
+      ]
+    },
+    {
+      name: 'Authenticated learning',
+      weight: 30,
+      flow: [
+        { post: { url: '/api/auth/login', json: { email: 'test@example.com' } } },
+        { get: { url: '/api/user/enrollments' } },
+        { get: { url: '/api/courses/{{ courseId }}/lessons/{{ lessonId }}' } }
+      ]
+    }
+  ]
+}
+This granular implementation knowledge provides the specific technical details needed to build the NSBS certification platform according to its strategic exclusion principles while ensuring scalability, security, and performance.

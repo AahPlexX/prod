@@ -1,0 +1,513 @@
+Based on the NSBS platform requirements, here's the complete user journey with all pages, interactions, and RBAC considerations:
+
+Complete User Journey Map
+Public Access (No Authentication Required)
+1. Homepage (src/app/page.tsx)
+User Actions:
+
+View course catalog grid
+
+Browse course categories
+
+Read course descriptions and pricing
+
+Access "About Us" and company information
+
+Click "Login" or "Get Started"
+
+Page Elements:
+
+Hero section with NSBS branding
+
+Featured courses carousel
+
+Course category filters
+
+Search functionality
+
+Pricing display
+
+Navigation header with Login/Register buttons
+
+RBAC Level: PUBLIC - No authentication required
+
+2. Course Catalog (src/app/courses/page.tsx)
+User Actions:
+
+Filter courses by category
+
+Sort by price, popularity, or alphabetical
+
+View course cards with titles, descriptions, and prices
+
+Click individual course for details
+
+Page Elements:
+
+Course grid layout
+
+Filter sidebar (categories)
+
+Sort dropdown
+
+Course cards showing: title, description, price, "View Details" button
+
+RBAC Level: PUBLIC - No authentication required
+
+3. Individual Course Preview (src/app/courses/[id]/page.tsx)
+User Actions:
+
+View complete course description
+
+See module and lesson breakdown
+
+Review exam format (100 MCQ, 80% passing)
+
+See what's included (2 exam attempts, certificate)
+
+Click "Enroll Now" (redirects to auth if not logged in)
+
+Page Elements:
+
+Course title and description
+
+Module/lesson outline (titles only, no content)
+
+Exam information
+
+Pricing and what's included
+
+"Enroll Now" CTA button
+
+Prerequisites (if any)
+
+RBAC Level: PUBLIC - Course preview only, no content access
+
+Authentication Flow
+4. Login Page (src/app/(auth)/login/page.tsx)
+User Actions:
+
+Enter email for magic link
+
+Click social login buttons (Google, GitHub, Facebook, LinkedIn)
+
+Switch to registration if new user
+
+Page Elements:
+
+Email input for magic link
+
+Social authentication buttons
+
+"New user? Register" link
+
+"Forgot password?" link
+
+RBAC Level: GUEST - Unauthenticated users only
+
+5. Registration Page (src/app/(auth)/register/page.tsx)
+User Actions:
+
+Enter email and basic information
+
+Choose authentication method
+
+Agree to terms and conditions
+
+Page Elements:
+
+Registration form
+
+Email input for magic link
+
+Social registration options
+
+Terms checkbox
+
+"Already have account? Login" link
+
+RBAC Level: GUEST - Unauthenticated users only
+
+6. Magic Link Verification (src/app/(auth)/magic-link/page.tsx)
+User Actions:
+
+Click magic link from email
+
+Automatic redirect to dashboard or intended course
+
+Page Elements:
+
+Loading spinner
+
+Success/error messages
+
+Auto-redirect functionality
+
+RBAC Level: AUTHENTICATING - Token verification
+
+Authenticated User Experience
+7. User Dashboard (src/app/(dashboard)/dashboard/page.tsx)
+User Actions:
+
+View enrolled courses and progress
+
+Browse available courses
+
+Access certificates
+
+Update profile information
+
+Page Elements:
+
+Welcome message with user name
+
+"My Courses" section with progress bars
+
+"Available Courses" recommendations
+
+Quick access to certificates
+
+Profile settings link
+
+RBAC Level: USER - Authenticated users only
+
+8. Course Purchase Flow (src/app/(dashboard)/courses/[id]/checkout/page.tsx)
+User Actions:
+
+Review course details and pricing
+
+Enter payment information
+
+Apply any discount codes
+
+Complete Stripe checkout
+
+Page Elements:
+
+Course summary
+
+Pricing breakdown
+
+Stripe payment form
+
+Terms of purchase
+
+"Complete Purchase" button
+
+RBAC Level: USER - Must be authenticated to purchase
+
+9. Payment Confirmation (src/app/(dashboard)/payment/success/page.tsx)
+User Actions:
+
+View purchase confirmation
+
+Access newly enrolled course
+
+Download receipt
+
+Page Elements:
+
+Purchase success message
+
+Course access button
+
+Receipt download link
+
+Return to dashboard option
+
+RBAC Level: USER - Post-purchase confirmation
+
+Course Learning Experience
+10. Course Overview (src/app/(dashboard)/my-courses/[id]/page.tsx)
+User Actions:
+
+View course progress
+
+Navigate to specific modules/lessons
+
+Access exam when all lessons complete
+
+Track completion percentage
+
+Page Elements:
+
+Course progress bar
+
+Module/lesson navigation tree
+
+"Continue where you left off" button
+
+Exam access (locked until 100% lesson completion)
+
+Certificate status
+
+RBAC Level: ENROLLED_USER - Must own course access
+
+11. Lesson Viewer (src/app/(dashboard)/my-courses/[id]/lesson/[lessonId]/page.tsx)
+User Actions:
+
+Read text-based lesson content
+
+Mark lesson as complete
+
+Navigate to next/previous lesson
+
+Return to course overview
+
+Page Elements:
+
+Lesson title and content (rich text)
+
+Progress indicator
+
+"Mark Complete" button
+
+Navigation controls (prev/next)
+
+Course navigation sidebar
+
+RBAC Level: ENROLLED_USER - Must own course access + lesson must be accessible
+
+12. Exam Interface (src/app/(dashboard)/my-courses/[id]/exam/page.tsx)
+User Actions:
+
+Start exam (100 multiple choice questions)
+
+Navigate between questions
+
+Submit exam
+
+View results
+
+Page Elements:
+
+Question counter (1 of 100)
+
+Question text and 4 multiple choice options
+
+Question navigation grid
+
+Timer (optional)
+
+"Submit Exam" button
+
+RBAC Level: ENROLLED_USER - Must own course + 100% lesson completion
+
+13. Exam Results (src/app/(dashboard)/my-courses/[id]/exam/results/[attemptId]/page.tsx)
+User Actions:
+
+View exam score
+
+Download certificate (if passed)
+
+Purchase additional exam voucher (if failed)
+
+Review incorrect answers
+
+Page Elements:
+
+Score display (X out of 100)
+
+Pass/fail status (80% threshold)
+
+Certificate download button (if passed)
+
+"Purchase Additional Attempt" button (if failed)
+
+Detailed results breakdown
+
+RBAC Level: ENROLLED_USER - Must own course + have taken exam
+
+14. Additional Exam Voucher Purchase (src/app/(dashboard)/my-courses/[id]/exam/purchase-voucher/page.tsx)
+User Actions:
+
+Purchase additional exam attempt ($149)
+
+Complete Stripe payment
+
+Return to exam interface
+
+Page Elements:
+
+Voucher pricing ($149)
+
+Payment form
+
+Purchase confirmation
+
+Terms of additional attempts
+
+RBAC Level: ENROLLED_USER - Must own course + have used all attempts
+
+Certificate Management
+15. Certificates Overview (src/app/(dashboard)/certificates/page.tsx)
+User Actions:
+
+View all earned certificates
+
+Download certificate PDFs
+
+Share certificate links
+
+Print certificates
+
+Page Elements:
+
+Certificate grid/list
+
+Download buttons
+
+Certificate verification links
+
+Course completion dates
+
+RBAC Level: USER - View own certificates only
+
+16. Individual Certificate (src/app/(dashboard)/certificates/[id]/page.tsx)
+User Actions:
+
+View certificate details
+
+Download PDF
+
+Verify certificate authenticity
+
+Page Elements:
+
+Certificate preview
+
+Student name, course name, completion date
+
+Verification ID
+
+Download PDF button
+
+Verification link for third parties
+
+RBAC Level: CERTIFICATE_OWNER - Must own certificate
+
+Administrative Areas (Future)
+17. Admin Dashboard (src/app/(admin)/dashboard/page.tsx)
+RBAC Level: ADMIN - Administrative access only
+
+18. Course Management (src/app/(admin)/courses/page.tsx)
+RBAC Level: ADMIN - Course creation/editing
+
+19. User Management (src/app/(admin)/users/page.tsx)
+RBAC Level: ADMIN - User account management
+
+RBAC Implementation Details
+Role Hierarchy
+typescript
+enum UserRole {
+  GUEST = 'GUEST',           // Unauthenticated users
+  USER = 'USER',             // Authenticated users
+  ENROLLED_USER = 'ENROLLED_USER', // Users with course access
+  CERTIFICATE_OWNER = 'CERTIFICATE_OWNER', // Certificate holders
+  ADMIN = 'ADMIN'            // Platform administrators
+}
+Permission Matrix
+Page/Action	GUEST	USER	ENROLLED_USER	ADMIN
+View homepage	✅	✅	✅	✅
+Browse courses	✅	✅	✅	✅
+View course preview	✅	✅	✅	✅
+Purchase course	❌	✅	✅	✅
+Access lesson content	❌	❌	✅ (owned courses)	✅
+Take exam	❌	❌	✅ (owned courses)	✅
+Download certificates	❌	❌	✅ (earned only)	✅
+Admin dashboard	❌	❌	❌	✅
+Access Control Implementation
+Route Protection (src/components/auth/auth-guard.tsx)
+typescript
+export function AuthGuard({ 
+  children, 
+  requiredRole, 
+  courseId, 
+  certificateId 
+}: AuthGuardProps) {
+  const user = useAuth()
+  
+  // Check authentication
+  if (!user && requiredRole !== 'GUEST') {
+    redirect('/login')
+  }
+  
+  // Check course enrollment
+  if (requiredRole === 'ENROLLED_USER' && courseId) {
+    const enrollment = useEnrollment(courseId)
+    if (!enrollment) {
+      redirect('/courses')
+    }
+  }
+  
+  // Check certificate ownership
+  if (requiredRole === 'CERTIFICATE_OWNER' && certificateId) {
+    const certificate = useCertificate(certificateId)
+    if (!certificate || certificate.userId !== user.id) {
+      redirect('/certificates')
+    }
+  }
+  
+  return children
+}
+API Route Protection
+Course Content API (src/app/api/courses/[id]/lessons/[lessonId]/route.ts)
+typescript
+export async function GET(
+  request: Request,
+  { params }: { params: { id: string, lessonId: string } }
+) {
+  const user = await getCurrentUser()
+  
+  if (!user) {
+    return new Response('Unauthorized', { status: 401 })
+  }
+  
+  const enrollment = await checkEnrollment(user.id, params.id)
+  
+  if (!enrollment) {
+    return new Response('Course not purchased', { status: 403 })
+  }
+  
+  const lesson = await getLessonContent(params.lessonId)
+  return Response.json(lesson)
+}
+Navigation State Management
+Dynamic Navigation (src/components/layout/header.tsx)
+typescript
+export function Header() {
+  const user = useAuth()
+  const pathname = usePathname()
+  
+  return (
+    <header>
+      <nav>
+        {/* Public navigation */}
+        <Link href="/">Home</Link>
+        <Link href="/courses">Courses</Link>
+        
+        {/* Authenticated navigation */}
+        {user && (
+          <>
+            <Link href="/dashboard">Dashboard</Link>
+            <Link href="/my-courses">My Courses</Link>
+            <Link href="/certificates">Certificates</Link>
+          </>
+        )}
+        
+        {/* Admin navigation */}
+        {user?.role === 'ADMIN' && (
+          <Link href="/admin">Admin</Link>
+        )}
+        
+        {/* Auth buttons */}
+        {!user ? (
+          <Link href="/login">Login</Link>
+        ) : (
+          <UserMenu user={user} />
+        )}
+      </nav>
+    </header>
+  )
+}
+This comprehensive user journey ensures proper RBAC implementation while maintaining the text-focused, distraction-free learning environment required for the NSBS certification platform.

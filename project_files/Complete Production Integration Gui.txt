@@ -1,0 +1,1566 @@
+Complete Production Integration Guide: NSBS Platform with Live Credentials (Updated for Business Topics)
+⚠️ CRITICAL SECURITY WARNING - LIVE PRODUCTION KEYS
+These are LIVE PRODUCTION CREDENTIALS that must be secured immediately:
+
+Never commit these to public repositories
+
+Implement strict server access controls
+
+Monitor for unauthorized access continuously
+
+Use environment variables exclusively
+
+Consider rotating all keys after initial setup
+
+Implement comprehensive audit logging
+
+1. Better-Auth Configuration (v1.2.8) with Production Credentials
+Core Authentication Setup
+File: src/lib/auth.ts
+
+typescript
+import { betterAuth } from "better-auth"
+import { supabaseAdapter } from "better-auth/adapters/supabase"
+import { magicLink } from "better-auth/plugins/magic-link"
+import { stripe } from "@better-auth/stripe"
+
+export const auth = betterAuth({
+  database: supabaseAdapter({
+    url: "https://ckdadactgselrtcgwkqi.supabase.co",
+    key: process.env.SUPABASE_SERVICE_ROLE_KEY!, // eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0ODQwODg3MywiZXhwIjoyMDYzOTg0ODczfQ.DAuE0Vm5iueaXJBbl5vm4xdmzmcBkRkVGYIMx0ZnsgA
+  }),
+  
+  emailAndPassword: {
+    enabled: false, // NSBS uses only magic link + social
+  },
+  
+  socialProviders: {
+    google: {
+      clientId: "1022530169855-vdqiuh12i4g4o3c9tfqpcigpi2159a78.apps.googleusercontent.com",
+      clientSecret: "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",
+      redirectURI: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/callback/google`,
+    },
+  },
+  
+  plugins: [
+    magicLink({
+      sendMagicLink: async ({ email, url, token }) => {
+        await sendNSBSMagicLinkEmail({
+          to: email,
+          magicLink: url,
+          token,
+        })
+      },
+      expiresIn: 60 * 15, // 15 minutes
+      disableSignUp: false,
+    }),
+    
+    stripe({
+      stripeSecretKey: process.env.STRIPE_SECRET_KEY!, // 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
+      webhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
+      createCustomerOnSignUp: true,
+    }),
+  ],
+  
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+    },
+  },
+  
+  user: {
+    additionalFields: {
+      stripeCustomerId: {
+        type: "string",
+        required: false,
+      },
+      enrollmentCount: {
+        type: "number",
+        defaultValue: 0,
+      },
+      lastLoginAt: {
+        type: "date",
+        required: false,
+      },
+    },
+  },
+  
+  callbacks: {
+    async signIn({ user, account }) {
+      await updateUserLastLogin(user.id)
+      return true
+    },
+    
+    async signUp({ user }) {
+      const stripeCustomer = await createStripeCustomer({
+        email: user.email,
+        name: user.name,
+        metadata: {
+          userId: user.id,
+          platform: 'NSBS',
+        },
+      })
+      
+      await updateUserStripeCustomerId(user.id, stripeCustomer.id)
+      return true
+    },
+  },
+})
+
+// NSBS-specific magic link email function
+async function sendNSBSMagicLinkEmail({ to, magicLink, token }: {
+  to: string
+  magicLink: string
+  token: string
+}) {
+  const emailContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>NSBS Login Link</title>
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="text-align: center; margin-bottom: 30px;">
+        <h1 style="color: #1a365d; margin: 0;">NSBS Certification</h1>
+        <p style="color: #4a5568; margin: 5px 0 0 0;">Professional Development Platform</p>
+      </div>
+      
+      <div style="background: #f7fafc; padding: 30px; border-radius: 8px; text-align: center;">
+        <h2 style="color: #2d3748; margin: 0 0 20px 0;">Access Your Account</h2>
+        <p style="color: #4a5568; margin: 0 0 30px 0; line-height: 1.5;">
+          Click the button below to securely log in to your NSBS account. This link will expire in 15 minutes.
+        </p>
+        
+        <a href="${magicLink}" style="display: inline-block; background: #3182ce; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; font-weight: 500;">
+          Log In to NSBS
+        </a>
+        
+        <p style="color: #718096; font-size: 14px; margin: 30px 0 0 0;">
+          If you didn't request this login link, you can safely ignore this email.
+        </p>
+      </div>
+      
+      <div style="text-align: center; margin-top: 30px; color: #a0aec0; font-size: 12px;">
+        <p>© 2025 NSBS Certification Platform</p>
+      </div>
+    </body>
+    </html>
+  `
+  
+  // Send via your email service (e.g., Resend, SendGrid, etc.)
+  await sendEmail({
+    to,
+    subject: 'Your NSBS Login Link',
+    html: emailContent,
+  })
+}
+Better-Auth Client Setup
+File: src/lib/auth-client.ts
+
+typescript
+import { createAuthClient } from "better-auth/react"
+
+export const authClient = createAuthClient({
+  baseURL: process.env.NEXT_PUBLIC_APP_URL || "https://nsbs-certified.com",
+  
+  sessionCookieName: "nsbs-session",
+  
+  fetchOptions: {
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  },
+})
+
+export const {
+  useSession,
+  signIn,
+  signOut,
+  signUp,
+  getSession,
+} = authClient
+
+// NSBS-specific authentication functions
+export async function signInWithMagicLink(email: string) {
+  return await authClient.signIn.magicLink({
+    email,
+    callbackURL: "/dashboard",
+  })
+}
+
+export async function signInWithGoogle() {
+  return await authClient.signIn.social({
+    provider: "google",
+    callbackURL: "/dashboard",
+  })
+}
+
+export async function getCurrentUser() {
+  const session = await getSession()
+  return session?.user || null
+}
+
+export async function requireAuth() {
+  const user = await getCurrentUser()
+  if (!user) {
+    throw new Error("Authentication required")
+  }
+  return user
+}
+
+export function hasRole(user: any, role: string) {
+  return user?.role === role
+}
+
+export function isAdmin(user: any) {
+  return user?.email === "admin@nsbs-certified.com" || hasRole(user, 'ADMIN')
+}
+
+export function isEnrolledInCourse(user: any, courseId: string) {
+  return user?.enrollments?.some((e: any) => e.courseId === courseId)
+}
+Authentication API Routes
+File: src/app/api/auth/[...all]/route.ts
+
+typescript
+import { auth } from "@/lib/auth"
+
+export const { GET, POST } = auth.handler
+File: src/app/api/auth/callback/google/route.ts
+
+typescript
+import { auth } from "@/lib/auth"
+import { NextRequest, NextResponse } from "next/server"
+
+export async function GET(request: NextRequest) {
+  try {
+    const response = await auth.handler(request)
+    
+    // Redirect to dashboard on successful authentication
+    if (response.status === 302) {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+    
+    return response
+  } catch (error) {
+    console.error('Google OAuth callback error:', error)
+    return NextResponse.redirect(new URL('/login?error=oauth_error', request.url))
+  }
+}
+2. Supabase Integration with Production Credentials
+Enhanced Supabase Client Configuration
+File: src/lib/supabase.ts
+
+typescript
+import { createClient } from '@supabase/supabase-js'
+
+// NSBS production Supabase configuration
+const supabaseUrl = 'https://ckdadactgselrtcgwkqi.supabase.co'
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0MDg4NzMsImV4cCI6MjA2Mzk4NDg3M30.L4cjRQmimaZhqcjiL_n5nKst-zf2J_oIcltuQdHoPPA'
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+    detectSessionInUrl: false,
+  },
+  
+  db: {
+    schema: 'public',
+  },
+  
+  global: {
+    headers: {
+      'x-application': 'nsbs-platform',
+    },
+  },
+})
+
+// Server-side client with service role
+const supabaseServiceKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0ODQwODg3MywiZXhwIjoyMDYzOTg0ODczfQ.DAuE0Vm5iueaXJBbl5vm4xdmzmcBkRkVGYIMx0ZnsgA'
+
+export const supabaseAdmin = createClient(
+  supabaseUrl,
+  supabaseServiceKey,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
+)
+Integrated Supabase Utils (Production)
+File: src/utils/supabase/server.ts
+
+typescript
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { cookies } from "next/headers";
+
+export const createClient = (cookieStore: ReturnType<typeof cookies>) => {
+  return createServerClient(
+    'https://ckdadactgselrtcgwkqi.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0MDg4NzMsImV4cCI6MjA2Mzk4NDg3M30.L4cjRQmimaZhqcjiL_n5nKst-zf2J_oIcltuQdHoPPA',
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
+        },
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options))
+          } catch {
+            // The `setAll` method was called from a Server Component.
+            // This can be ignored if you have middleware refreshing
+            // user sessions.
+          }
+        },
+      },
+    },
+  );
+};
+File: src/utils/supabase/client.ts
+
+typescript
+import { createBrowserClient } from "@supabase/ssr";
+
+export const createClient = () =>
+  createBrowserClient(
+    'https://ckdadactgselrtcgwkqi.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0MDg4NzMsImV4cCI6MjA2Mzk4NDg3M30.L4cjRQmimaZhqcjiL_n5nKst-zf2J_oIcltuQdHoPPA',
+  );
+File: src/utils/supabase/middleware.ts
+
+typescript
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { type NextRequest, NextResponse } from "next/server";
+
+export const createClient = (request: NextRequest) => {
+  let supabaseResponse = NextResponse.next({
+    request: {
+      headers: request.headers,
+    },
+  });
+
+  const supabase = createServerClient(
+    'https://ckdadactgselrtcgwkqi.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0MDg4NzMsImV4cCI6MjA2Mzk4NDg3M30.L4cjRQmimaZhqcjiL_n5nKst-zf2J_oIcltuQdHoPPA',
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll()
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
+          supabaseResponse = NextResponse.next({
+            request,
+          })
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          )
+        },
+      },
+    },
+  );
+
+  return supabaseResponse
+};
+3. Stripe Integration with Live Production Keys
+Stripe Configuration with Real Credentials
+File: src/lib/stripe.ts
+
+typescript
+import Stripe from 'stripe'
+
+// PRODUCTION Stripe instance with live keys
+export const stripe = new Stripe('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', {
+  apiVersion: '2024-06-20',
+  typescript: true,
+  telemetry: false,
+})
+
+// NSBS-specific Stripe configuration
+export const STRIPE_CONFIG = {
+  COURSE_PRICES: {
+    DEFAULT: 29900, // $299.00
+    PREMIUM: 49900, // $499.00
+  },
+  
+  EXAM_VOUCHER_PRICE: 14900, // $149.00
+  CURRENCY: 'usd',
+  PAYMENT_METHODS: ['card'],
+  
+  AUTOMATIC_PAYMENT_METHODS: {
+    enabled: true,
+    allow_redirects: 'never',
+  },
+} as const
+
+export async function createStripeCustomer(data: {
+  email: string
+  name?: string
+  metadata?: Record<string, string>
+}) {
+  return await stripe.customers.create({
+    email: data.email,
+    name: data.name,
+    metadata: {
+      platform: 'NSBS',
+      ...data.metadata,
+    },
+  })
+}
+
+export async function createCoursePaymentIntent(data: {
+  courseId: string
+  userId: string
+  stripeCustomerId: string
+  amountCents: number
+  courseName: string
+}) {
+  return await stripe.paymentIntents.create({
+    amount: data.amountCents,
+    currency: STRIPE_CONFIG.CURRENCY,
+    customer: data.stripeCustomerId,
+    payment_method_types: STRIPE_CONFIG.PAYMENT_METHODS,
+    automatic_payment_methods: STRIPE_CONFIG.AUTOMATIC_PAYMENT_METHODS,
+    
+    metadata: {
+      type: 'course_purchase',
+      course_id: data.courseId,
+      user_id: data.userId,
+      platform: 'NSBS',
+    },
+    
+    description: `NSBS Course: ${data.courseName}`,
+    setup_future_usage: 'off_session',
+  })
+}
+
+export async function createExamVoucherPaymentIntent(data: {
+  courseId: string
+  userId: string
+  stripeCustomerId: string
+  courseName: string
+}) {
+  return await stripe.paymentIntents.create({
+    amount: STRIPE_CONFIG.EXAM_VOUCHER_PRICE,
+    currency: STRIPE_CONFIG.CURRENCY,
+    customer: data.stripeCustomerId,
+    payment_method_types: STRIPE_CONFIG.PAYMENT_METHODS,
+    automatic_payment_methods: STRIPE_CONFIG.AUTOMATIC_PAYMENT_METHODS,
+    
+    metadata: {
+      type: 'exam_voucher',
+      course_id: data.courseId,
+      user_id: data.userId,
+      platform: 'NSBS',
+    },
+    
+    description: `NSBS Additional Exam Attempt: ${data.courseName}`,
+  })
+}
+
+export async function retrievePaymentIntent(paymentIntentId: string) {
+  return await stripe.paymentIntents.retrieve(paymentIntentId)
+}
+
+export function constructWebhookEvent(body: string, signature: string) {
+  return stripe.webhooks.constructEvent(
+    body,
+    signature,
+    process.env.STRIPE_WEBHOOK_SECRET!
+  )
+}
+Stripe Provider Component with Production Keys
+File: src/components/payments/stripe-provider.tsx
+
+typescript
+'use client'
+
+import { Elements } from '@stripe/react-stripe-js'
+import { loadStripe } from '@stripe/stripe-js'
+import { ReactNode } from 'react'
+
+// Load Stripe with production publishable key
+const stripePromise = loadStripe('pk_live_51QrJyELvO2CMwfxd40FgpGaoGIjAsTD3B5SzYbO4dXcNN9isfWg6OQInvbMVdBmo8lOINKIcshHdXITaHEcaeJgB00bAbFjItT')
+
+interface StripeProviderProps {
+  children: ReactNode
+  clientSecret?: string
+  options?: {
+    appearance?: object
+    locale?: string
+  }
+}
+
+export function StripeProvider({ children, clientSecret, options = {} }: StripeProviderProps) {
+  const elementsOptions = {
+    clientSecret,
+    appearance: {
+      theme: 'stripe' as const,
+      variables: {
+        colorPrimary: '#3182ce',
+        colorBackground: '#ffffff',
+        colorText: '#2d3748',
+        colorDanger: '#e53e3e',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        spacingUnit: '4px',
+        borderRadius: '6px',
+      },
+      rules: {
+        '.Input': {
+          border: '1px solid #e2e8f0',
+          padding: '12px',
+        },
+        '.Input:focus': {
+          border: '1px solid #3182ce',
+          boxShadow: '0 0 0 3px rgba(49, 130, 206, 0.1)',
+        },
+        '.Label': {
+          fontWeight: '500',
+          color: '#2d3748',
+          marginBottom: '8px',
+        },
+      },
+    },
+    locale: 'en' as const,
+    ...options,
+  }
+
+  return (
+    <Elements stripe={stripePromise} options={elementsOptions}>
+      {children}
+    </Elements>
+  )
+}
+Stripe API Routes with Production Integration
+File: src/app/api/payments/create-intent/route.ts
+
+typescript
+import { NextRequest, NextResponse } from 'next/server'
+import { createCoursePaymentIntent, createExamVoucherPaymentIntent } from '@/lib/stripe'
+import { getCurrentUser } from '@/lib/auth-client'
+import { getCourseById, getUserById } from '@/lib/data/supabase-queries'
+
+export async function POST(request: NextRequest) {
+  try {
+    const user = await getCurrentUser()
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { courseId, type } = await request.json()
+
+    if (!courseId || !type) {
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      )
+    }
+
+    const course = await getCourseById(courseId)
+    if (!course) {
+      return NextResponse.json({ error: 'Course not found' }, { status: 404 })
+    }
+
+    const userData = await getUserById(user.id)
+    if (!userData?.stripe_customer_id) {
+      return NextResponse.json(
+        { error: 'Stripe customer not found' },
+        { status: 400 }
+      )
+    }
+
+    let paymentIntent
+
+    if (type === 'course') {
+      paymentIntent = await createCoursePaymentIntent({
+        courseId,
+        userId: user.id,
+        stripeCustomerId: userData.stripe_customer_id,
+        amountCents: course.price_cents,
+        courseName: course.title,
+      })
+    } else if (type === 'exam_voucher') {
+      paymentIntent = await createExamVoucherPaymentIntent({
+        courseId,
+        userId: user.id,
+        stripeCustomerId: userData.stripe_customer_id,
+        courseName: course.title,
+      })
+    } else {
+      return NextResponse.json({ error: 'Invalid payment type' }, { status: 400 })
+    }
+
+    return NextResponse.json({
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+    })
+  } catch (error) {
+    console.error('Payment intent creation error:', error)
+    return NextResponse.json(
+      { error: 'Failed to create payment intent' },
+      { status: 500 }
+    )
+  }
+}
+File: src/app/api/webhooks/stripe/route.ts
+
+typescript
+import { NextRequest, NextResponse } from 'next/server'
+import { constructWebhookEvent } from '@/lib/stripe'
+import { createEnrollment } from '@/lib/data/supabase-queries'
+import { supabaseAdmin } from '@/lib/supabase'
+
+export async function POST(request: NextRequest) {
+  const body = await request.text()
+  const signature = request.headers.get('stripe-signature')!
+
+  try {
+    const event = constructWebhookEvent(body, signature)
+
+    switch (event.type) {
+      case 'payment_intent.succeeded': {
+        const paymentIntent = event.data.object
+        
+        const { type, course_id, user_id } = paymentIntent.metadata
+        
+        if (type === 'course_purchase') {
+          await createEnrollment({
+            userId: user_id,
+            courseId: course_id,
+            stripePaymentIntentId: paymentIntent.id,
+            stripeCustomerId: paymentIntent.customer as string,
+            amountPaidCents: paymentIntent.amount,
+          })
+          
+          await supabaseAdmin
+            .from('users')
+            .update({ 
+              enrollment_count: supabaseAdmin.rpc('increment_enrollment_count', { user_id })
+            })
+            .eq('id', user_id)
+          
+          console.log(`Course enrollment created for user ${user_id}, course ${course_id}`)
+        
+        } else if (type === 'exam_voucher') {
+          await supabaseAdmin
+            .from('exam_vouchers')
+            .insert({
+              user_id,
+              course_id,
+              stripe_payment_intent_id: paymentIntent.id,
+              stripe_customer_id: paymentIntent.customer as string,
+              amount_paid_cents: paymentIntent.amount,
+            })
+          
+          console.log(`Exam voucher created for user ${user_id}, course ${course_id}`)
+        }
+        
+        await supabaseAdmin
+          .from('payments')
+          .insert({
+            user_id,
+            stripe_payment_intent_id: paymentIntent.id,
+            stripe_customer_id: paymentIntent.customer as string,
+            amount_cents: paymentIntent.amount,
+            currency: paymentIntent.currency,
+            status: 'succeeded',
+            payment_type: type,
+            related_id: course_id,
+          })
+        
+        break
+      }
+
+      case 'payment_intent.payment_failed': {
+        const paymentIntent = event.data.object
+        
+        await supabaseAdmin
+          .from('payments')
+          .insert({
+            user_id: paymentIntent.metadata.user_id,
+            stripe_payment_intent_id: paymentIntent.id,
+            stripe_customer_id: paymentIntent.customer as string,
+            amount_cents: paymentIntent.amount,
+            currency: paymentIntent.currency,
+            status: 'failed',
+            payment_type: paymentIntent.metadata.type,
+            related_id: paymentIntent.metadata.course_id,
+          })
+        
+        console.log(`Payment failed for ${paymentIntent.id}`)
+        break
+      }
+
+      default:
+        console.log(`Unhandled event type: ${event.type}`)
+    }
+
+    return NextResponse.json({ received: true })
+  } catch (error) {
+    console.error('Webhook error:', error)
+    return NextResponse.json({ error: 'Webhook failed' }, { status: 400 })
+  }
+}
+4. Production Database Setup
+Supabase Database Initialization (Production)
+File: database/production-init.sql
+
+sql
+-- Execute this in your PRODUCTION Supabase SQL editor
+-- URL: https://ckdadactgselrtcgwkqi.supabase.co
+
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Create custom types
+CREATE TYPE user_role AS ENUM ('GUEST', 'USER', 'ENROLLED_USER', 'CERTIFICATE_OWNER', 'ADMIN');
+CREATE TYPE course_status AS ENUM ('draft', 'published', 'archived');
+CREATE TYPE payment_status AS ENUM ('pending', 'succeeded', 'failed', 'canceled');
+
+-- Users table with NSBS admin setup
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  name VARCHAR(255),
+  role user_role DEFAULT 'USER',
+  email_verified BOOLEAN DEFAULT FALSE,
+  stripe_customer_id VARCHAR(255) UNIQUE,
+  enrollment_count INTEGER DEFAULT 0,
+  last_login_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Insert the admin user for admin@nsbs-certified.com
+INSERT INTO users (email, role, email_verified) 
+VALUES ('admin@nsbs-certified.com', 'ADMIN', true)
+ON CONFLICT (email) DO UPDATE SET role = 'ADMIN';
+
+-- Better-Auth required tables
+CREATE TABLE IF NOT EXISTS sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  token VARCHAR(255) UNIQUE NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  provider VARCHAR(50) NOT NULL,
+  provider_account_id VARCHAR(255) NOT NULL,
+  access_token TEXT,
+  refresh_token TEXT,
+  expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(provider, provider_account_id)
+);
+
+-- NSBS Core Tables
+CREATE TABLE courses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title VARCHAR(500) NOT NULL,
+  slug VARCHAR(255) UNIQUE NOT NULL,
+  description TEXT NOT NULL,
+  price_cents INTEGER NOT NULL,
+  exam_threshold INTEGER DEFAULT 80,
+  status course_status DEFAULT 'draft',
+  stripe_price_id VARCHAR(255),
+  content_hash VARCHAR(64),
+  version INTEGER DEFAULT 1,
+  published_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE modules (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  title VARCHAR(500) NOT NULL,
+  description TEXT,
+  order_index INTEGER NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(course_id, order_index)
+);
+
+CREATE TABLE lessons (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  module_id UUID REFERENCES modules(id) ON DELETE CASCADE,
+  title VARCHAR(500) NOT NULL,
+  content_file_path VARCHAR(500) NOT NULL,
+  order_index INTEGER NOT NULL,
+  is_mandatory BOOLEAN DEFAULT TRUE,
+  estimated_read_time_minutes INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(module_id, order_index)
+);
+
+CREATE TABLE enrollments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  stripe_payment_intent_id VARCHAR(255) NOT NULL,
+  stripe_customer_id VARCHAR(255) NOT NULL,
+  amount_paid_cents INTEGER NOT NULL,
+  enrolled_at TIMESTAMPTZ DEFAULT NOW(),
+  expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '2 years',
+  UNIQUE(user_id, course_id)
+);
+
+CREATE TABLE lesson_progress (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  lesson_id UUID REFERENCES lessons(id) ON DELETE CASCADE,
+  completed_at TIMESTAMPTZ,
+  time_spent_seconds INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, lesson_id)
+);
+
+CREATE TABLE exam_questions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  question_text TEXT NOT NULL,
+  option_a TEXT NOT NULL,
+  option_b TEXT NOT NULL,
+  option_c TEXT NOT NULL,
+  option_d TEXT NOT NULL,
+  correct_answer CHAR(1) CHECK (correct_answer IN ('A', 'B', 'C', 'D')),
+  difficulty_level INTEGER CHECK (difficulty_level BETWEEN 1 AND 5),
+  topic_category VARCHAR(255),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE exam_attempts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  attempt_number INTEGER NOT NULL,
+  started_at TIMESTAMPTZ DEFAULT NOW(),
+  submitted_at TIMESTAMPTZ,
+  score INTEGER CHECK (score BETWEEN 0 AND 100),
+  passed BOOLEAN GENERATED ALWAYS AS (score >= 80) STORED,
+  questions_data JSONB NOT NULL,
+  answers_data JSONB,
+  time_limit_minutes INTEGER DEFAULT 120,
+  ip_address INET,
+  user_agent TEXT,
+  browser_fingerprint VARCHAR(255),
+  UNIQUE(user_id, course_id, attempt_number)
+);
+
+CREATE TABLE certificates (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  exam_attempt_id UUID REFERENCES exam_attempts(id) ON DELETE CASCADE,
+  verification_code VARCHAR(20) UNIQUE NOT NULL,
+  issued_at TIMESTAMPTZ DEFAULT NOW(),
+  pdf_url TEXT,
+  pdf_generated_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_reason TEXT
+);
+
+CREATE TABLE exam_vouchers (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  course_id UUID REFERENCES courses(id) ON DELETE CASCADE,
+  stripe_payment_intent_id VARCHAR(255) NOT NULL,
+  stripe_customer_id VARCHAR(255) NOT NULL,
+  amount_paid_cents INTEGER NOT NULL DEFAULT 14900,
+  purchased_at TIMESTAMPTZ DEFAULT NOW(),
+  used_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ DEFAULT NOW() + INTERVAL '1 year'
+);
+
+CREATE TABLE payments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  stripe_payment_intent_id VARCHAR(255) UNIQUE NOT NULL,
+  stripe_customer_id VARCHAR(255) NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  currency VARCHAR(3) DEFAULT 'usd',
+  status payment_status DEFAULT 'pending',
+  payment_type VARCHAR(50) NOT NULL,
+  related_id UUID,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Performance indexes
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_stripe_customer ON users(stripe_customer_id);
+CREATE INDEX idx_enrollments_user_course ON enrollments(user_id, course_id);
+CREATE INDEX idx_lesson_progress_user ON lesson_progress(user_id);
+CREATE INDEX idx_exam_attempts_user_course ON exam_attempts(user_id, course_id);
+CREATE INDEX idx_certificates_verification ON certificates(verification_code);
+CREATE INDEX idx_payments_stripe_intent ON payments(stripe_payment_intent_id);
+
+-- Enable Row Level Security
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lesson_progress ENABLE ROW LEVEL SECURITY;
+ALTER TABLE exam_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE certificates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE exam_vouchers ENABLE ROW LEVEL SECURITY;
+
+-- RLS Policies
+CREATE POLICY "Users can view own profile" ON users
+  FOR SELECT USING (auth.uid()::text = id::text);
+
+CREATE POLICY "Users can update own profile" ON users
+  FOR UPDATE USING (auth.uid()::text = id::text);
+
+CREATE POLICY "Users can view own enrollments" ON enrollments
+  FOR SELECT USING (auth.uid()::text = user_id::text);
+
+CREATE POLICY "Users can view own progress" ON lesson_progress
+  FOR SELECT USING (auth.uid()::text = user_id::text);
+
+CREATE POLICY "Users can update own progress" ON lesson_progress
+  FOR ALL USING (auth.uid()::text = user_id::text);
+
+CREATE POLICY "Users can view own certificates" ON certificates
+  FOR SELECT USING (auth.uid()::text = user_id::text);
+
+CREATE POLICY "Courses are publicly viewable" ON courses
+  FOR SELECT USING (status = 'published');
+
+-- Admin access for admin@nsbs-certified.com
+CREATE POLICY "Admin full access" ON users
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM users 
+      WHERE id::text = auth.uid()::text 
+      AND (role = 'ADMIN' OR email = 'admin@nsbs-certified.com')
+    )
+  );
+Database Connection Configuration
+File: src/lib/db.ts
+
+typescript
+import postgres from 'postgres'
+
+// Production database connection
+const connectionString = 'postgresql://postgres:cObd7fpM3aNzHj4O@db.ckdadactgselrtcgwkqi.supabase.co:5432/postgres'
+const sql = postgres(connectionString, {
+  ssl: 'require',
+  max: 20,
+  idle_timeout: 20,
+  connect_timeout: 10,
+})
+
+export default sql
+5. Production Environment Configuration
+File: .env.local
+
+bash
+# ⚠️  PRODUCTION CREDENTIALS - SECURE IMMEDIATELY ⚠️
+
+# App Configuration
+NEXT_PUBLIC_APP_URL=https://nsbs-certified.com
+NEXT_PUBLIC_APP_NAME="NSBS Certification Platform"
+
+# Better-Auth Configuration (PRODUCTION)
+BETTER_AUTH_SECRET=oMZggfZiGXAW2qrRzKpmARYjs71TJwYv
+BETTER_AUTH_URL=https://nsbs-certified.com
+
+# Supabase Configuration (PRODUCTION)
+NEXT_PUBLIC_SUPABASE_URL=https://ckdadactgselrtcgwkqi.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg0MDg4NzMsImV4cCI6MjA2Mzk4NDg3M30.L4cjRQmimaZhqcjiL_n5nKst-zf2J_oIcltuQdHoPPA
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrZGFkYWN0Z3NlbHJ0Y2d3a3FpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0ODQwODg3MywiZXhwIjoyMDYzOTg0ODczfQ.DAuE0Vm5iueaXJBbl5vm4xdmzmcBkRkVGYIMx0ZnsgA
+SUPABASE_JWT_SECRET=dlmjF3OMqdfPEg4fZxuc/Ql2IjHQO77kEmFhPWSwyQWXt/iqDhT0Lgz6b02lVDRs0l/8QaBHCUg8LC9+OuIKrQ==
+
+# Google OAuth Configuration (PRODUCTION)
+GOOGLE_CLIENT_ID=1022530169855-vdqiuh12i4g4o3c9tfqpcigpi2159a78.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=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
+
+# Stripe Configuration (PRODUCTION LIVE KEYS)
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_51QrJyELvO2CMwfxd40FgpGaoGIjAsTD3B5SzYbO4dXcNN9isfWg6OQInvbMVdBmo8lOINKIcshHdXITaHEcaeJgB00bAbFjItT
+STRIPE_SECRET_KEY=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
+STRIPE_RESTRICTED_KEY=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
+STRIPE_WEBHOOK_SECRET=whsec_your-webhook-secret-from-stripe-dashboard
+
+# Admin Configuration
+ADMIN_EMAIL=admin@nsbs-certified.com
+ADMIN_USER_ID=your-admin-user-uuid-from-database
+
+# Database Configuration (PRODUCTION)
+DATABASE_URL=postgresql://postgres:cObd7fpM3aNzHj4O@db.ckdadactgselrtcgwkqi.supabase.co:5432/postgres
+
+# Email Configuration (for magic links)
+EMAIL_FROM=noreply@nsbs-certified.com
+EMAIL_PROVIDER=resend
+EMAIL_API_KEY=your-email-service-api-key
+6. Business Course Content Management System (.ts files)
+Business Course Content Structure
+File: src/content/courses/retail-management-professional.ts
+
+typescript
+export const retailManagementProfessional = {
+  id: 'retail-management-professional',
+  title: 'Retail Management Professional (RMP)',
+  slug: 'retail-management-professional',
+  description: 'The Retail Management Professional course is designed to equip participants with a comprehensive understanding of retail management, its applications, and its role in driving informed decision-making. This course covers the entire retail management lifecycle, from data collection and preparation to analysis and reporting, providing a solid foundation for anyone looking to advance their career in retail management or related fields.',
+  price: 22800, // $228.00 in cents
+  status: 'published' as const,
+  examThreshold: 80,
+  contentHash: 'sha256-retail123...', // Generated from all lesson content
+  version: 1,
+  createdAt: '2025-01-15T00:00:00Z',
+  updatedAt: '2025-05-28T00:00:00Z',
+  publishedAt: '2025-01-20T00:00:00Z',
+  
+  modules: [
+    {
+      id: 'module-1-foundations',
+      title: 'Module 1: Foundations of Retail Management',
+      description: 'Core concepts and principles of retail management',
+      orderIndex: 1,
+      lessons: [
+        {
+          id: 'lesson-1-defining-retail-management',
+          title: 'Defining Retail Management and Its Importance',
+          orderIndex: 1,
+          isMandatory: true,
+          estimatedReadTimeMinutes: 15,
+          content: `
+            <h2>Key Definition of Retail Management</h2>
+            
+            <p>Retail Management is the systematic process of overseeing and coordinating all aspects of a retail operation to achieve business objectives while delivering customer value. This comprehensive discipline emerged in the early 20th century as retail operations grew in complexity, evolving from simple shopkeeping to sophisticated multi-channel enterprises.</p>
+            
+            <p>At its core, retail management encompasses:</p>
+            <ul>
+              <li><strong>Merchandising and buying:</strong> Selecting the right products at the right prices</li>
+              <li><strong>Inventory management:</strong> Ensuring optimal stock levels to balance availability and investment</li>
+              <li><strong>Store operations:</strong> Creating efficient, appealing shopping environments</li>
+              <li><strong>Customer service:</strong> Delivering experiences that build loyalty and satisfaction</li>
+              <li><strong>Marketing and promotion:</strong> Attracting customers and communicating value propositions</li>
+              <li><strong>Human resources:</strong> Recruiting, training, and motivating retail staff</li>
+              <li><strong>Financial management:</strong> Controlling costs and maximizing profitability</li>
+              <li><strong>Technology integration:</strong> Leveraging digital tools to enhance operations</li>
+            </ul>
+            
+            <h3>Evolution of Retail Management</h3>
+            
+            <p>The discipline has evolved dramatically over time:</p>
+            <ul>
+              <li><strong>1900s-1950s:</strong> Focus on basic operations and inventory control</li>
+              <li><strong>1950s-1980s:</strong> Emergence of scientific management principles in retail</li>
+              <li><strong>1980s-2000s:</strong> Rise of customer relationship management approaches</li>
+              <li><strong>2000s-Present:</strong> Digital transformation, omnichannel integration, and data-driven decision making</li>
+            </ul>
+            
+            <p>Retail management differs from general management through its customer proximity, inventory intensity, margin sensitivity, location criticality, staffing challenges, and seasonality factors.</p>
+            
+            <h3>Why Retail Management is Critical Today</h3>
+            
+            <p>Today's retail landscape is characterized by unprecedented competition:</p>
+            <ul>
+              <li><strong>Cross-format competition:</strong> Traditional retailers now compete with diverse formats</li>
+              <li><strong>Global competition:</strong> International retailers entering local markets</li>
+              <li><strong>Channel blurring:</strong> Manufacturers opening direct-to-consumer channels</li>
+              <li><strong>Digital disruptors:</strong> E-commerce platforms challenging brick-and-mortar dominance</li>
+            </ul>
+            
+            <blockquote>
+              <p>According to research, 52% of retail executives identify increased competition as their top challenge, with retailers facing 3.7 times more competitors than a decade ago.</p>
+            </blockquote>
+            
+            <h4>Evolving Consumer Expectations</h4>
+            <ul>
+              <li><strong>Digital influence:</strong> Over 70% of shopping journeys begin online</li>
+              <li><strong>Experience expectations:</strong> 76% of consumers expect consistent interactions across channels</li>
+              <li><strong>Convenience demands:</strong> 83% of shoppers cite convenience as more important now</li>
+              <li><strong>Value consciousness:</strong> Post-pandemic, 65% of consumers are more focused on value</li>
+              <li><strong>Ethical considerations:</strong> 73% of Gen Z are willing to pay more for sustainable products</li>
+            </ul>
+            
+            <h3>Resource Optimization in Retail</h3>
+            
+            <p>Effective retail management is essential for optimizing limited resources:</p>
+            
+            <h4>Staff Optimization:</h4>
+            <ul>
+              <li>Labor scheduling algorithms reduce costs by 4-7% while maintaining service</li>
+              <li>Cross-training programs develop versatile employees</li>
+              <li>Performance-based scheduling assigns top performers to peak hours</li>
+            </ul>
+            
+            <h4>Inventory Optimization:</h4>
+            <ul>
+              <li>Predictive analytics reduces inventory costs by 10-15%</li>
+              <li>Localized assortments increase turns and reduce markdowns</li>
+              <li>Just-in-time approaches minimize stock while maintaining availability</li>
+            </ul>
+            
+            <h4>Space Optimization:</h4>
+            <ul>
+              <li>Space productivity metrics maximize return on real estate investment</li>
+              <li>Dynamic space allocation adjusts based on seasonality and performance</li>
+              <li>Experience-focused design balances selling space with experience areas</li>
+            </ul>
+            
+            <p>Retail operates on thin margins (typically 2-5% net profit), making effective management crucial for sustainability through margin management, cost control, revenue diversification, and risk mitigation.</p>
+            
+            <h3>Data-Driven Decision Making</h3>
+            
+            <p>Retail has transformed from intuition-based to data-driven decision making:</p>
+            <ul>
+              <li><strong>Historical approach:</strong> Reliance on experience and "gut feel"</li>
+              <li><strong>Early data usage:</strong> Basic sales reports and inventory counts</li>
+              <li><strong>Current state:</strong> Comprehensive data ecosystems enabling sophisticated analysis</li>
+            </ul>
+            
+            <p>This evolution has improved decision quality:</p>
+            <ul>
+              <li>Reduction in forecasting errors from 30-40% to 10-15%</li>
+              <li>Markdown optimization reducing price reductions by 10-15%</li>
+              <li>Assortment efficiency improving SKU productivity by 20-30%</li>
+            </ul>
+            
+            <h4>Modern Data Types</h4>
+            <ul>
+              <li><strong>Sales data:</strong> Transaction details, temporal patterns, promotion response</li>
+              <li><strong>Customer data:</strong> Demographics, behavior, engagement metrics, lifetime value</li>
+              <li><strong>Inventory data:</strong> Stock levels, movement metrics, shrinkage information</li>
+              <li><strong>Competitor data:</strong> Pricing intelligence, assortment comparisons, promotional activity</li>
+            </ul>
+            
+            <h3>Value Creation Through Retail Management</h3>
+            
+            <p>Effective retail management creates value for diverse stakeholders:</p>
+            
+            <h4>For Businesses:</h4>
+            <ul>
+              <li>Revenue growth: Outperforming peers by 3-5% in comparable sales</li>
+              <li>Margin enhancement: Improving gross margins by 1-3 percentage points</li>
+              <li>Asset efficiency: Increasing return on invested capital by 5-10%</li>
+              <li>Brand equity: Building brand value through consistent execution</li>
+            </ul>
+            
+            <h4>For Customers:</h4>
+            <ul>
+              <li>Need fulfillment: Access to desired products when and where wanted</li>
+              <li>Time savings: Convenient shopping experiences reducing effort</li>
+              <li>Discovery value: Curated assortments facilitating new product discovery</li>
+              <li>Problem resolution: Service recovery when issues arise</li>
+            </ul>
+            
+            <p>Research demonstrates specific value created:</p>
+            <ul>
+              <li>Top-quartile retailers generate 55% higher sales per square foot</li>
+              <li>Best-practice inventory management reduces working capital by 15-20%</li>
+              <li>Effective service strategies increase customer retention by 20-30%</li>
+              <li>Omnichannel customers spend 30% more than single-channel shoppers</li>
+            </ul>
+            
+            <p>Effective retail management balances immediate results with sustainable value through long-term investment horizons, customer lifetime focus, infrastructure development, brand building, and talent development.</p>
+          `
+        },
+        
+        {
+          id: 'lesson-2-types-of-retail-analytics',
+          title: 'Types of Retail Management Analytics (Descriptive, Diagnostic, Predictive, Prescriptive)',
+          orderIndex: 2,
+          isMandatory: true,
+          estimatedReadTimeMinutes: 18,
+          content: `
+            <h2>Descriptive Analytics: Understanding What Happened</h2>
+            
+            <p>Descriptive analytics forms the foundation of retail analytics, focusing on summarizing historical data to understand past performance and trends. This approach answers the question: "What happened?"</p>
+            
+            <h3>Key Components of Descriptive Analytics in Retail</h3>
+            
+            <h4>Sales Performance Analysis</h4>
+            <p>Examining historical sales data across various dimensions (product, category, store, region, time period) to identify patterns and trends. Examples include:</p>
+            <ul>
+              <li>Year-over-year sales growth/decline by department</li>
+              <li>Seasonal sales patterns for specific categories</li>
+              <li>Bestselling and worst-selling items</li>
+              <li>Sales by hour, day, or week to identify peak periods</li>
+            </ul>
+            
+            <h4>Customer Behavior Metrics</h4>
+            <p>Analyzing historical customer data to understand shopping patterns:</p>
+            <ul>
+              <li>Average transaction value</li>
+              <li>Items per transaction</li>
+              <li>Shopping frequency</li>
+              <li>Customer demographics and segmentation</li>
+              <li>Loyalty program participation rates</li>
+            </ul>
+            
+            <h4>Inventory Performance Indicators</h4>
+            <p>Evaluating how inventory has performed:</p>
+            <ul>
+              <li>Inventory turnover rates by category</li>
+              <li>Days of supply</li>
+              <li>Sell-through percentages</li>
+              <li>Out-of-stock occurrences</li>
+              <li>Shrinkage rates and patterns</li>
+            </ul>
+            
+            <h4>Operational Metrics</h4>
+            <p>Measuring past operational efficiency:</p>
+            <ul>
+              <li>Labor hours vs. sales</li>
+              <li>Conversion rates (visitors to buyers)</li>
+              <li>Returns and exchanges by reason</li>
+              <li>Queue lengths and checkout times</li>
+            </ul>
+            
+            <p>Descriptive analytics typically employs visualization techniques like dashboards, reports, and charts to make data more accessible and actionable for retail managers. While it doesn't explain why events occurred or predict future outcomes, it provides the essential foundation for more advanced analytics.</p>
+            
+            <blockquote>
+              <p><strong>Retail Example:</strong> A department store uses descriptive analytics to create a monthly performance dashboard showing sales by department, top-selling items, inventory levels, and year-over-year comparisons, helping managers understand current performance relative to historical patterns.</p>
+            </blockquote>
+            
+            <h2>Diagnostic Analytics: Determining Why It Happened</h2>
+            
+            <p>Diagnostic analytics builds upon descriptive analytics by investigating the causes behind the patterns observed in historical data. This approach answers the question: "Why did it happen?"</p>
+            
+            <h3>Key Components of Diagnostic Analytics in Retail</h3>
+            
+            <h4>Root Cause Analysis</h4>
+            <p>Drilling down into data to identify factors contributing to specific outcomes:</p>
+            <ul>
+              <li>Why did sales decline in a particular category?</li>
+              <li>Why did customer traffic decrease at certain locations?</li>
+              <li>Why did inventory shrinkage increase in specific departments?</li>
+              <li>Why did conversion rates vary between similar stores?</li>
+            </ul>
+            
+            <h4>Correlation Analysis</h4>
+            <p>Identifying relationships between variables that might explain performance:</p>
+            <ul>
+              <li>Relationship between weather patterns and product sales</li>
+              <li>Impact of promotional activities on category performance</li>
+              <li>Correlation between staffing levels and sales conversion</li>
+              <li>Connection between store layout changes and dwell time</li>
+            </ul>
+            
+            <h4>Comparative Analysis</h4>
+            <p>Examining differences between high and low-performing units:</p>
+            <ul>
+              <li>Store-to-store performance comparisons</li>
+              <li>Department benchmark analysis</li>
+              <li>Employee performance differentials</li>
+              <li>Regional variation assessment</li>
+            </ul>
+            
+            <h4>Anomaly Investigation</h4>
+            <p>Exploring unusual patterns or outliers in the data:</p>
+            <ul>
+              <li>Unexpected sales spikes or drops</li>
+              <li>Unusual customer behavior patterns</li>
+              <li>Inventory discrepancies</li>
+              <li>Operational inefficiencies</li>
+            </ul>
+            
+            <p>Diagnostic analytics often employs statistical techniques, data mining, drill-down capabilities, and A/B testing to uncover causal relationships. It requires more sophisticated analytical skills than descriptive analytics but provides deeper insights that can inform corrective actions.</p>
+            
+            <blockquote>
+              <p><strong>Retail Example:</strong> After noticing a 15% sales decline in the women's footwear department, a retailer uses diagnostic analytics to determine that the drop coincided with a major competitor's promotion, a reduction in visual merchandising space, and inventory gaps in key sizes—insights that can inform a targeted response strategy.</p>
+            </blockquote>
+            
+            <h2>Predictive Analytics: Anticipating What Will Happen</h2>
+            
+            <p>Predictive analytics leverages historical data patterns to forecast future outcomes and trends. This approach answers the question: "What is likely to happen?"</p>
+            
+            <h3>Key Applications of Predictive Analytics in Retail</h3>
+            
+            <h4>Demand Forecasting</h4>
+            <p>Projecting future sales and demand patterns:</p>
+            <ul>
+              <li>Seasonal demand predictions by product/category</li>
+              <li>New product sales forecasting</li>
+              <li>Promotion impact modeling</li>
+              <li>Store traffic projections</li>
+              <li>Online vs. offline channel growth predictions</li>
+            </ul>
+            
+            <h4>Inventory Optimization</h4>
+            <p>Anticipating inventory needs to balance availability and investment:</p>
+            <ul>
+              <li>Optimal stock levels by location</li>
+              <li>Reorder point recommendations</li>
+              <li>Markdown timing predictions</li>
+              <li>Allocation suggestions across stores</li>
+              <li>Safety stock requirements</li>
+            </ul>
+            
+            <h4>Customer Behavior Prediction</h4>
+            <p>Forecasting customer actions and preferences:</p>
+            <ul>
+              <li>Customer lifetime value estimation</li>
+              <li>Churn probability scoring</li>
+              <li>Next best product recommendations</li>
+              <li>Price sensitivity modeling</li>
+              <li>Channel preference prediction</li>
+            </ul>
+            
+            <h4>Market Trend Analysis</h4>
+            <p>Identifying emerging trends and opportunities:</p>
+            <ul>
+              <li>Category growth predictions</li>
+              <li>Competitor response modeling</li>
+              <li>Economic impact forecasting</li>
+              <li>Technology adoption curves</li>
+              <li>Consumer sentiment analysis</li>
+            </ul>
+            
+            <p>Predictive analytics employs machine learning algorithms, statistical modeling, and time series analysis to generate forecasts. The accuracy of predictions depends on data quality, model sophistication, and the stability of underlying patterns.</p>
+            
+            <blockquote>
+              <p><strong>Retail Example:</strong> A fashion retailer uses predictive analytics to forecast demand for seasonal items, optimizing initial orders and reducing end-of-season markdowns by 25% while maintaining 95% in-stock levels for popular items.</p>
+            </blockquote>
+            
+            <h2>Prescriptive Analytics: Determining What Should Be Done</h2>
+            
+            <p>Prescriptive analytics goes beyond prediction to recommend specific actions that will optimize outcomes. This approach answers the question: "What should we do?"</p>
+            
+            <h3>Key Applications of Prescriptive Analytics in Retail</h3>
+            
+            <h4>Price Optimization</h4>
+            <p>Determining optimal pricing strategies:</p>
+            <ul>
+              <li>Dynamic pricing recommendations</li>
+              <li>Markdown optimization timing and depth</li>
+              <li>Promotional pricing strategies</li>
+              <li>Competitive pricing responses</li>
+              <li>Bundle pricing optimization</li>
+            </ul>
+            
+            <h4>Assortment Planning</h4>
+            <p>Optimizing product mix and allocation:</p>
+            <ul>
+              <li>SKU rationalization recommendations</li>
+              <li>New product introduction strategies</li>
+              <li>Space allocation optimization</li>
+              <li>Store cluster-specific assortments</li>
+              <li>Seasonal category planning</li>
+            </ul>
+            
+            <h4>Resource Allocation</h4>
+            <p>Optimizing the deployment of resources:</p>
+            <ul>
+              <li>Staff scheduling optimization</li>
+              <li>Marketing budget allocation</li>
+              <li>Store investment prioritization</li>
+              <li>Supply chain optimization</li>
+              <li>Technology investment planning</li>
+            </ul>
+            
+            <h4>Customer Experience Optimization</h4>
+            <p>Enhancing customer interactions and satisfaction:</p>
+            <ul>
+              <li>Personalized marketing recommendations</li>
+              <li>Customer journey optimization</li>
+              <li>Service level recommendations</li>
+              <li>Channel strategy optimization</li>
+              <li>Loyalty program design</li>
+            </ul>
+            
+            <p>Prescriptive analytics combines optimization algorithms, simulation modeling, and business rules to generate actionable recommendations. It requires deep understanding of business constraints, objectives, and trade-offs.</p>
+            
+            <blockquote>
+              <p><strong>Retail Example:</strong> A grocery chain uses prescriptive analytics to optimize store layouts, recommending specific product placements that increase basket size by 12% while improving customer satisfaction scores through reduced shopping time.</p>
+            </blockquote>
+            
+            <h3>Integration of Analytics Types</h3>
+            
+            <p>Successful retail analytics programs integrate all four types in a progressive manner:</p>
+            
+            <ol>
+              <li><strong>Foundation:</strong> Descriptive analytics provides the data foundation and performance visibility</li>
+              <li><strong>Understanding:</strong> Diagnostic analytics explains performance drivers and identifies improvement opportunities</li>
+              <li><strong>Anticipation:</strong> Predictive analytics forecasts future scenarios and trends</li>
+              <li><strong>Action:</strong> Prescriptive analytics recommends optimal strategies and tactics</li>
+            </ol>
+            
+            <p>This integrated approach enables retail managers to make informed, data-driven decisions that drive sustainable business growth and customer satisfaction.</p>
+          `
+        }
+      ]
+    }
+  ],
+  
+  // Business-focused exam questions
+  examQuestions: [
+    {
+      id: 'q1-retail-management-definition',
+      questionText: 'Which of the following best defines retail management?',
+      optionA: 'The process of selling products directly to consumers',
+      optionB: 'The systematic process of overseeing and coordinating all aspects of a retail operation to achieve business objectives while delivering customer value',
+      optionC: 'Managing inventory levels in retail stores',
+      optionD: 'Training sales staff to improve customer service',
+      correctAnswer: 'B',
+      difficulty: 2,
+      topicCategory: 'foundations'
+    },
+    
+    {
+      id: 'q2-analytics-types',
+      questionText: 'Which type of retail analytics answers the question "What happened?"',
+      optionA: 'Descriptive Analytics',
+      optionB: 'Diagnostic Analytics',
+      optionC: 'Predictive Analytics',
+      optionD: 'Prescriptive Analytics',
+      correctAnswer: 'A',
+      difficulty: 1,
+      topicCategory: 'analytics'
+    },
+    
+    {
+      id: 'q3-resource-optimization',
+      questionText: 'According to the course, predictive analytics can reduce inventory costs by what percentage?',
+      optionA: '5-8%',
+      optionB: '10-15%',
+      optionC: '15-20%',
+      optionD: '20-25%',
+      correctAnswer: 'B',
+      difficulty: 3,
+      topicCategory: 'optimization'
+    },
+    
+    // ... Additional business-focused questions up to 100+ for full exam
+  ]
+} as const
+
+export default retailManagementProfessional
+Additional Business Course Examples
+File: src/content/courses/digital-marketing-specialist.ts
+
+typescript
+export const digitalMarketingSpecialist = {
+  id: 'digital-marketing-specialist',
+  title: 'Digital Marketing Specialist (DMS)',
+  slug: 'digital-marketing-specialist',
+  description: 'Master the fundamentals of digital marketing including SEO, social media marketing, email campaigns, content strategy, and analytics to drive business growth in the digital age.',
+  price: 24900, // $249.00 in cents
+  status: 'published' as const,
+  examThreshold: 80,
+  contentHash: 'sha256-digital456...',
+  version: 1,
+  createdAt: '2025-01-15T00:00:00Z',
+  updatedAt: '2025-05-28T00:00:00Z',
+  publishedAt: '2025-01-20T00:00:00Z',
+  
+  modules: [
+    {
+      id: 'module-1-digital-foundations',
+      title: 'Module 1: Digital Marketing Foundations',
+      description: 'Core concepts and principles of digital marketing',
+      orderIndex: 1,
+      lessons: [
+        {
+          id: 'lesson-1-digital-marketing-landscape',
+          title: 'Understanding the Digital Marketing Landscape',
+          orderIndex: 1,
+          isMandatory: true,
+          estimatedReadTimeMinutes: 12,
+          content: `
+            <h2>Digital Marketing Evolution</h2>
+            
+            <p>Digital marketing encompasses all marketing efforts that use electronic devices or the internet. Businesses leverage digital channels such as search engines, social media, email, and other websites to connect with current and prospective customers.</p>
+            
+            <h3>Key Digital Marketing Channels</h3>
+            
+            <ul>
+              <li><strong>Search Engine Optimization (SEO):</strong> Optimizing content to rank higher in search engine results</li>
+              <li><strong>Pay-per-Click (PPC):</strong> Paid advertising on search engines and social platforms</li>
+              <li><strong>Social Media Marketing:</strong> Building brand awareness and engagement on social platforms</li>
+              <li><strong>Email Marketing:</strong> Direct communication with customers and prospects</li>
+              <li><strong>Content Marketing:</strong> Creating valuable content to attract and retain audiences</li>
+              <li><strong>Affiliate Marketing:</strong> Partnership-based marketing for expanded reach</li>
+            </ul>
+            
+            <h3>Digital Marketing vs Traditional Marketing</h3>
+            
+            <p>Digital marketing offers several advantages over traditional marketing:</p>
+            <ul>
+              <li>Real-time measurement and analytics</li>
+              <li>Targeted audience segmentation</li>
+              <li>Cost-effective reach</li>
+              <li>Interactive customer engagement</li>
+              <li>Global market access</li>
+            </ul>
+            
+            <p>The shift to digital has been accelerated by changing consumer behavior, with 87% of shoppers beginning product searches online and 79% of consumers conducting online research before making purchasing decisions.</p>
+          `
+        }
+      ]
+    }
+  ],
+  
+  examQuestions: [
+    {
+      id: 'q1-digital-marketing-definition',
+      questionText: 'What percentage of shoppers begin product searches online according to the course?',
+      optionA: '75%',
+      optionB: '79%',
+      optionC: '87%',
+      optionD: '92%',
+      correctAnswer: 'C',
+      difficulty: 2,
+      topicCategory: 'foundations'
+    }
+  ]
+} as const
+
+export default digitalMarketingSpecialist
+Content Management API for Business Courses
+File: src/app/api/courses/route.ts
+
+typescript
+import { NextResponse } from 'next/server'
+import { courseContentManager } from '@/lib/content/course-loader'
+
+export async function GET() {
+  try {
+    const courses = await courseContentManager.getPublishedCourses()
+    
+    // Return business course catalog
+    const courseList = courses.map(course => ({
+      id: course.id,
+      title: course.title,
+      slug: course.slug,
+      description: course.description,
+      price: course.price,
+      estimatedDuration: course.modules.reduce((total, module) => 
+        total + module.lessons.reduce((moduleTotal, lesson) => 
+          moduleTotal + lesson.estimatedReadTimeMinutes, 0
+        ), 0
+      ),
+      moduleCount: course.modules.length,
+      lessonCount: course.modules.reduce((total, module) => total + module.lessons.length, 0),
+      category: course.id.includes('retail') ? 'Retail Management' :
+                course.id.includes('digital') ? 'Digital Marketing' :
+                course.id.includes('project') ? 'Project Management' :
+                course.id.includes('financial') ? 'Financial Analysis' :
+                'Business Management'
+    }))
+
+    return NextResponse.json(courseList)
+  } catch (error) {
+    console.error('Error fetching business courses:', error)
+    return NextResponse.json({ error: 'Failed to fetch courses' }, { status: 500 })
+  }
+}
+7. Google OAuth Configuration (Production)
+OAuth Consent Screen Configuration
+Based on your Google Cloud Console setup:
+
+Project ID: nsbs-certified-460417
+
+Client ID: `1022530169855-vdqiuh12i4g4o
